@@ -1,0 +1,8 @@
+# System Configuration 
+
+[tools] # available tools, map tools -> path to probe
+block_sched       = "example/block_sched.toml"
+block_sched_local = "example/block_sched_local.toml"
+tensorop_count    = "example/tensorop_count.toml"
+gmem_bytes        = "example/mem_global_bytes.toml"
+bra_acc           = "example/bra_acc.toml"
