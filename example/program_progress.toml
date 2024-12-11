@@ -1,0 +1,11 @@
+author = "Neutrino Team"
+description = """A spatial sampler on the program progress via 
+probing the bra instruction forming mainloop of most GPU program"""
+
+[bra]
+position  = "bra" 
+datamodel = "thread:8:128"
+no_pred   = true  # ignore original predictive
+before = """mov.u64 %lclock, %clock64;
+SAVE.u64 {%lclock};"""
+# after probe of bra might be ignored as branch elsewhere

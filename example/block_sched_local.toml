@@ -1,0 +1,20 @@
+author="Neutrino Team"
+description="""Record start timestamp, elapsed time and smid of each warp
+can be reduced to NSight Occupancy and launch__waves_per_multiprocessor
+This is the same as block_sched but use local timer for better accuracy
+while sacrifies the auto alignment from gloabl timer"""
+
+[block_sched]
+position = "kernel"
+datamodel = "warp:16" # every warp save 16 bytes
+before = """.reg .b64 %lstart; // local start time (unit: cycle)
+.reg .b64 %lend;    // local end time (unit: cycle)
+.reg .b64 %elapsed; // thread elapsed time in u64
+.reg .b32 %elapse;  // thread elapsed time in u32
+mov.u64 %lstart, %clock64;"""
+# following operationo is done only by leader thread
+after = """mov.u64 %lend, %clock64;
+sub.u64 %elapsed, %lend, %lstart; 
+cvt.u32.u64 %elapse, %elapsed; // convert to u32
+SAVE.u64 {%lstart}; // store start in u64 for alignment
+SAVE.u32 {%elapse, %smid}; // store elapased time and core id"""
