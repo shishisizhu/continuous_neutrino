@@ -4,6 +4,8 @@ can be reduced to NSight Occupancy and launch__waves_per_multiprocessor
 This is the same as block_sched but use local timer for better accuracy
 while sacrifies the auto alignment from gloabl timer"""
 
+analyze_hook = "block_sched.py"
+
 [block_sched]
 position = "kernel"
 datamodel = "warp:16" # every warp save 16 bytes

@@ -53,7 +53,14 @@ def get_arch() -> str:
     major, minor = sm_version.split(".")
     """
     # NOTE sometimes auto-detection like above will fail, so manually fix at the time
-    return "sm_80" 
+    result = subprocess.run(
+        ['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
+        stdout=subprocess.PIPE, 
+        text=True)
+    # sm_version like `8.9`
+    sm_version = result.stdout.split("\n")[0].strip()
+    major, minor = sm_version.split(".")
+    return f"sm_{major}{minor}" 
 
 def extract(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
     """Extract PTX from cuda binaries (cubin or fatbin) via cuobjdump
@@ -280,11 +287,40 @@ WARP_PROBE_BUFFER = """// begin {name} buffer
 @%leader add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4;  // offset to get final thread-specific address
 // end {name} buffer"""
 
+# NOTE Template for Generating Trace Reading Code
+TRACE_READING_CODE_PY = """# Neutrino Auto-Generated Code for Trace Reading
+import struct
+from typing import NamedTuple, List, Tuple
+from neutrino import TraceHeader, TraceSection
+
+class {probe_name}(NamedTuple):
+{saved_content}
+
+def parse(path: str) -> Tuple[TraceHeader, List[TraceSection], List[List[{probe_name}]]]:
+    with open(path, "rb") as f:
+        gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, numProbes = struct.unpack("iiiiiiii", f.read(32))
+        header: TraceHeader = TraceHeader(gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, numProbes)
+        assert header.numProbes == 1 # currently only one saving probe is supported
+        sections: List[TraceSection] = []
+        for _ in range(header.numProbes):
+            size, offset = struct.unpack("QQ", f.read(16))
+            sections.append(TraceSection(size, offset))
+        gridSize = header.gridDimX * header.gridDimY * header.gridDimZ
+        blockSize = header.blockDimX * header.blockDimY * header.blockDimZ
+        records: List[List[{probe_name}]] = []
+        for i in range(gridSize):
+            records.append([])
+            for j in range(blockSize{warp_div}):
+                {saved_reading} = struct.unpack("{format_string}", f.read({reading_bytes}))
+                records[i].append({probe_name}({saved_reading}))
+        return header, sections, records
+"""
+
 # NOTE for every probe with datamodel not none
 # only support .u64 and recommend use 16 bytes alignment, minimum is 8 bytes
 PROBE_PARAM = ".param .u64 param_{name}"
 
-def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int]]:
+def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
     """Process the probes, the core function of probing engine
 
     In general, Take several steps, from:
@@ -333,22 +369,51 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int]]:
 
     def validate_probe(probes: List[Probe]) -> List[Probe]:
         """Validate probes, including
-        1. Register Access, all registers shall be declared -> testing 
-        2. Branch Operation -> supported
-        3. Using Shared Memory -> testing
-
-        NOTE: moidified to non-inplace operation over in-place
+        1. Register Access, all registers shall be declared with .reg .type %regname;
+        2. Branch Operation -> Not supported
+        3. Using Shared Memory -> Not supported
         """
         safe_probes: List[Probe] = []
+        regs = []
         for probe in probes:
             rejected = False
-            if probe.before is not None and "bra" in probe.before:
-                rejected = True
-            if probe.after is not None and "bra" in probe.after:
-                rejected = True
+            if probe.before is not None: 
+                if "bra" in probe.before: 
+                    print("bra is not allowed", file=log)
+                    rejected = True
+                elif ".shared" in probe.before: 
+                    print("shared memory is not allowed", file=log)
+                    rejected = True # NO SHARED MEMORY
+                else:
+                    for line in probe.before.split("\n"):
+                        if ".reg" in line: 
+                            regs.append(line[:line.index(";")].split(" ")[-1])
+                        elif not line.startswith("SAVE"):
+                            out_op = line[:line.index(";")].split(",")[0].split(" ")[-1]
+                            if out_op not in regs: 
+                                print(f"Not allowed to modify undeclared {out_op}", file=log)
+                                rejected = True
+            if probe.after is not None: 
+                if "bra" in probe.after: 
+                    print("bra is not allowed", file=log)
+                    rejected = True
+                elif ".shared" in probe.after: 
+                    print("shared memory is not allowed", file=log)
+                    rejected = True # NO SHARED MEMORY
+                else:
+                    for line in probe.after.split("\n"):
+                        if ".reg" in line: 
+                            regs.append(line[:line.index(";")].split(" ")[-1])
+                        elif not line.startswith("SAVE"):
+                            out_op = line[:line.index(";")].split(",")[0].split(" ")[-1]
+                            if out_op not in regs: 
+                                print(f"Not allowed to modify undeclared {out_op}", file=log)
+                                rejected = True
             if not rejected:
                 safe_probes.append(probe)
         return safe_probes
+    
+    probes: List[Probe] = validate_probe(probes)
 
     # NOTE parse interesting locations
     # A mapping from location to probes, a probe can hook at multiple location
@@ -467,6 +532,10 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int]]:
                 offset += 1
             processed.add(probe.name)
         # all rest is treated as no saving
+    
+    # NOTE for reading the trace into Python
+    trace_reading_code = ""
+
     # Now add the instruction listenings 
     for idx in range(len(ptx_lines)):
         # ignore most of line that is a string!
@@ -540,6 +609,10 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int]]:
                     pred = "@%leader " # apply filter that only leader works
                 else:
                     pred = "@%joint_pred " # will be updated %leader AND pred
+            
+            # NOTE for reading the probe afterwards
+            saved: List[Tuple[str, str]] = []
+
             for snippet_line_idx in range(len(snippet_lines)):
                 snippet_line: str = snippet_lines[snippet_line_idx]
                 if "SAVE" in snippet_line: # only one save, at the begin of line
@@ -551,13 +624,23 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int]]:
                     if dtype == "u64":
                         for item_idx in range(len(items) // 2): # try to generate vectorized!
                             save_lines.append(f"{pred}st.global.v2.u64 [%buf_{probe.name}1],  {{ {items[item_idx * 2]}, {items[item_idx * 2 + 1]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 16;")
+                            # TODO Need to convert register starts with % to Python variable name, now only forget 1st one
+                            saved.append((items[item_idx * 2], "Q")) # Q := u64 in Python struct
+                            saved.append((items[item_idx * 2 + 1], "Q")) # Q := u64 in Python struct
                         if len(items) % 2 != 0: # odd number -> one item left!
                             save_lines.append(f"{pred}st.global.u64 [%buf_{probe.name}1], {items[-1]};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 8;")
+                            saved.append((items[-1], "Q")) # Q := u64 in Python struct
                     elif dtype == "u32":
                         for item_idx in range(len(items) // 4): # try to generate vectorized!
                             save_lines.append(f"{pred}st.global.v4.u32 [%buf_{probe.name}1],  {{ {items[item_idx * 4]}, {items[item_idx * 4 + 1]}, {items[item_idx * 4 + 2]}, {items[item_idx * 4 + 3]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 16;")
+                            saved.append((items[item_idx * 4], "I")) # I := u32 in Python struct
+                            saved.append((items[item_idx * 4 + 1], "I")) # I := u32 in Python struct
+                            saved.append((items[item_idx * 4 + 2], "I")) # I := u32 in Python struct
+                            saved.append((items[item_idx * 4 + 3], "I")) # I := u32 in Python struct
                         if len(items) % 4 != 0: # two items left...
                             save_lines.append(f"{pred}st.global.v2.u32 [%buf_{probe.name}1],  {{ {items[-2]}, {items[-1]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 8;")
+                            saved.append((items[-2], "I")) # I := u32 in Python struct
+                            saved.append((items[-1], "I")) # I := u32 in Python struct
                     else:
                         raise ValueError(f"Unsupported dtype {dtype} in {probe.name}:{'before' if before_after else 'after'}")
                     snippet_lines[snippet_line_idx] = "\n".join(save_lines)
@@ -570,9 +653,26 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int]]:
             snippet = "\n".join(snippet_lines)
             # finally replace the Ref with snippet to finish the probing!
             ptx_lines[idx] = snippet
+            # Finalizing Code Generation for Reading Probe Content
+            if probe.datamodel is not None:
+                saved_content = ""
+                saved_reading = ""
+                format_string = ""
+                reading_bytes = 0
+                for name, dtype in saved:
+                    name = name.strip()
+                    name = name[1:] if name.startswith("%") else name
+                    saved_content += f"\t{name}: int\n"
+                    saved_reading += f"{name}, "
+                    format_string += dtype
+                    reading_bytes += 8 if dtype == "Q" else 4
+                trace_reading_code += TRACE_READING_CODE_PY.format(probe_name = probe.name, 
+                    saved_content=saved_content, saved_reading=saved_reading[:-2], 
+                    format_string=format_string, reading_bytes=reading_bytes,
+                    warp_div="//32" if probe.datamodel.startswith("warp") else "")
 
-    # Finally finished.
-    return "\n".join(ptx_lines), probe_mem_sizes
+    # Finally finished.1
+    return "\n".join(ptx_lines), probe_mem_sizes, trace_reading_code
 
 def compile_ptx_to_bin(workdir: str, name: str) -> str:
     """compile the ptx into cubin via ptxas
@@ -620,7 +720,9 @@ def parse_params(ptx: str) -> Tuple[List[KernelParam], str]:
         params.append(KernelParam(dtype, name))
     return params, ptx[name_start + 1:start] # + 1 := ignore space
 
-def write_kernel_info(name: str, params: List[KernelParam], probe_mem_sizes: List[int], workdir: str, file_name: str = "kernel.info"):
+
+def write_kernel_info(name: str, params: List[KernelParam], probe_mem_sizes: List[int], 
+                      workdir: str, analyze_hook: str = "", file_name: str = "kernel.info"):
     """write kernel info to workdir/file_name"""
     # TODO add support for vectorized items
     with open(os.path.join(workdir, file_name), "w") as f:
@@ -633,6 +735,10 @@ def write_kernel_info(name: str, params: List[KernelParam], probe_mem_sizes: Lis
         # size of each memory section
         for probe_type, size in probe_mem_sizes:
             print(f"{SUPPORTED_DATAMODEL[probe_type]},{size}", file=f)
+        # NOTE: print the hook here, resolve relative path
+        if analyze_hook != "" and not analyze_hook.startswith("/"): 
+            analyze_hook = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", analyze_hook)
+        print(analyze_hook, file=f)
         # NOTE: following are referencing stuff not really used by hook driver
         for param in params:
             print(f"{param.name},{param.dtype}", file=f)
@@ -656,6 +762,7 @@ if __name__ == "__main__":
     
     # filter out, probes are nested dict in TOML via [name]
     probes: Dict[str, dict] = dict()
+    analyze_hook = probe_toml["analyze_hook"] if "analyze_hook" in probe_toml else ""
     for key, value in probe_toml.items():
         if isinstance(value, dict):
             probes[key] = value
@@ -687,7 +794,7 @@ if __name__ == "__main__":
             f.write(pruned_ptx)
 
         # process ptx lines
-        probed_ptx, probe_mem_sizes = probing(entry_section, probes)
+        probed_ptx, probe_mem_sizes, trace_reading_code = probing(entry_section, probes)
 
         # merge global and func back
         probed_ptx  = global_section + "\n" + func_section + "\n" + probed_ptx
@@ -697,11 +804,13 @@ if __name__ == "__main__":
             f.write(probed_ptx)
         
         # params = parse_params(ptx_lines)
-        write_kernel_info(kernel_name, params, probe_mem_sizes, workdir)
+        write_kernel_info(kernel_name, params, probe_mem_sizes, workdir, analyze_hook)
 
         # compile ptx to binary, we want both probed and pruned
         compile_ptx_to_bin(workdir, "probed")
         compile_ptx_to_bin(workdir, "pruned")
+
+        print(trace_reading_code, file=log)
 
     except Exception as e:
         traceback.print_exc(file=log)
