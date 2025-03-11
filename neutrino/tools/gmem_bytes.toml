@@ -3,6 +3,8 @@ description="""Record Number of Bytes of Global Memory Access
 Separate sync (ld,st) and async copy (cp.async), unit in bytes
 NOTE: not yet support Warp-Group MMA"""
 
+analyze_hook = "gmem_bytes.py"
+
 [saving]
 position = "kernel"
 datamodel = "thread:8"

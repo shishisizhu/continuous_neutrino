@@ -510,6 +510,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
     int* probe_sizes; // size of probes
     int* probe_types; // type of probes
     bool succeed; // jit status
+    char* analyze_hook; // 
 
     // try obtain the kernel compiled or raise compilation process 
     // @note count and record is only valid if succeed == true
@@ -597,10 +598,14 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
             char* strptr = strchr(strchr(start, '\n') + 1, '\n') + 1;
             for (int idx = 0; idx < n_probe; idx++) {
                 sscanf(strptr, "%d,%d\n", &probe_types[idx], &probe_sizes[idx]);
-                strptr = strchr(start, '\n') + 1;
+                strptr = strchr(strptr, '\n') + 1;
             }
+            // @note read process hook, not yet checked
+            char* info_end = strchr(strptr, '\n');
+            *info_end = '\0';
+            analyze_hook = strptr;
             // here read the 
-            fprintf(log, "[jit] read %s name %s n_param %d n_probe %d\n", path, kernel_name, n_param, n_probe);
+            fprintf(log, "[jit] read %s name %s n_param %d n_probe %d analyze_hook %s\n", path, kernel_name, n_param, n_probe, analyze_hook);
             // load probed.bin -> for collecting runtime info
             sprintf(path, "%s/probed.bin", dir);
             void* probed_bin = readf(path, "rb");
@@ -771,11 +776,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
         free(h_probe_mems[idx]);
         CUDA_CHECK(real_cuMemFree_v2(d_probe_mems[idx]));
     }
-    free(h_probe_mems);
-    free(d_probe_mems);
-    free(probe_real_sizes);
-    free(probe_args);
-    
+
     // on leave
     CUDA_CHECK(real_cuEventRecord(end_event, hStream)); // use the stream specified in param
     CUDA_CHECK(real_cuEventSynchronize(end_event));
@@ -796,6 +797,32 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
     } else {
         fprintf(log, "[exec] prologue %f kernel %f epilogue %f ratio %f\n", prologue_time, kernel_time, epilogue_time, (prologue_time + kernel_time + epilogue_time) / kernel_time);
     }
+
+    // @note do the analyze_hook
+    if (strlen(analyze_hook) >= 3 && strcmp(analyze_hook + strlen(analyze_hook) - 3, ".py") == 0) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(log, "[jit] can't-folk\n");
+        } else if (pid == 0) { // child process, run python process.py kernel name
+            // python process.py <work_dir> <kernel_name>
+            execlp(NEUTRINO_PYTHON, NEUTRINO_PYTHON, analyze_hook, DUMP_FILE_NAME, NULL);
+            exit(EXIT_FAILURE); // reach here only if exec error -> failure
+        } else { // parent process, wait for child
+            fprintf(log, "[analyze] subproc %s %s %s\n", NEUTRINO_PYTHON, analyze_hook, DUMP_FILE_NAME);
+            int status;
+            waitpid(pid, &status, 0);
+            if (status != EXIT_SUCCESS) { 
+                fprintf(log, "[analyze] failed\n");
+            } else {
+                fprintf(log, "[analyze] succeed\n");
+            }
+        }
+    }
+    
+    free(h_probe_mems);
+    free(d_probe_mems);
+    free(probe_real_sizes);
+    free(probe_args);
     
     return CUDA_SUCCESS; // reach here must be CUDA_SUCCESS
 
