@@ -138,16 +138,9 @@ string(APPEND CMAKE_CUDA_FLAGS " -gencode arch=compute_80,code=compute_80")
 ```
 
 #### Triton
-Triton support requires configuring the `TRITON_CACHE_DIR` environment variable. This can be set to any value such as the current directory via `TRITON_CACHE_DIR=.` in bash or place following snippet at the beginning of your Python script:
+We recommend Triton users configuring the `TRITON_CACHE_DIR` environment variable when using `neutrino` for profiling. This can be set to any value such as a local folder `cache/` via `TRITON_CACHE_DIR=cache` in bash.
 
-```py title="begin of your python code"
-import os
-os.environ["TRITON_CACHE_DIR"] = "cache"
-```
-
-This environment variable is used to instruct Triton to generate and save PTX assembly in GPU executable submitted to driver and catched by `neutrino`.
-
-And if you run into any problem, clear existed Triton build with `rm -rf cache`
+And if you run into any problem, clear existed Triton build with `rm -rf cache`. This will force Triton rebuild everything, particularly its launcher. This is becuase Triton statically link its launcher instead of dynamically open so one need to clear build to force Triton find the correct driver (hooked or unhooked).
 
 #### CUTLASS
 Please follow the [guide](https://github.com/NVIDIA/cutlass/blob/main/media/docs/quickstart.md) , but switch on an internal macro `CUTLASS_NVCC_EMBED_PTX` in building via `cmake`:
