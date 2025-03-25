@@ -8,6 +8,10 @@ For observability, Neutrino mainly features:
 2. Programmability: `neutrino` extends the programmability of previous instrumentation tools (NvBit, GTPin, HIPAnalyzer) by probe cooperation with registers as temporal storage
 3. Versatility: `neutrino` supports both value profiling (capturing register value in runtime like memory address) and value profiling (capture timestamp of operation via reading clock).
 
+> [!NOTE]  
+> 🥳We are delighted to share that AMD ROCm/HIP Support is now Alpha🥳 Please use `git clone --branch rocm https://github.com/neutrino-gpu/neutrino`.
+> Please kindly check the branch of `rocm` for more details! Current support is not stable and we will continue updating to resolve bugs!
+
 Check our demo hosted on Colab:
 
 
