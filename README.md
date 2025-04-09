@@ -77,21 +77,21 @@ Due to the unique characteristic of GPU, we can not support full Python syntax, 
 
 ## Roadmap
 * Consumption (`neutrino/language/main.py`)
-    [ ] Build a CLI entry like `neutrino compile` or `neutrino-compile`
+    - [ ] Build a CLI entry like `neutrino compile` or `neutrino-compile`
 * Language Primitive (`neutrino/langauge/__init__.py`)
-    [x] Helper operands: `src/dst/out/in1/in2/in3/in4`
-    [x] Helper functions: `time()`, `clock()`, `save()`, `smid()`.
+    - [x] Helper operands: `src/dst/out/in1/in2/in3/in4`
+    - [x] Helper functions: `time()`, `clock()`, `save()`, `smid()`.
 * Parser and Transformation (`neutrino/langauge/frontend.py`)
-    [x] Support register declaration and initial value
-    [x] Support binary and unary operator parsing
-    [x] Support function call parsing
-    [ ] Support `if-else` statement for flexible profiling (`if` is implememted via execution mask other than `jmp`)
+    - [x] Support register declaration and initial value
+    - [x] Support binary and unary operator parsing
+    - [x] Support function call parsing
+    - [ ] Support `if-else` statement for flexible profiling (`if` is implememted via execution mask other than `jmp`)
 * Backend
     * NVIDIA PTX Backend (`neutrino/langauge/cuda.py`)
-        [ ] Declare register and assign initial value
-        [ ] Basic Arithemetic
-        [ ] Primitive function calling
+        - [ ] Declare register and assign initial value
+        - [ ] Basic Arithemetic
+        - [ ] Primitive function calling
     * AMD GCNAsm Backend (`neutrino/langauge/rocm.py`)
-        [ ] Declare register and assign initial value
-        [ ] Basic Arithemetic
-        [ ] Primitive function calling
+        - [ ] Declare register and assign initial value
+        - [ ] Basic Arithemetic
+        - [ ] Primitive function calling
