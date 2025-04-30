@@ -1,0 +1,19 @@
+author="Neutrino Team"
+description="""Draw DMAT for the Kernel
+WARNING: DMAT Trace Size is LARGE, Please do it for SINGLE Kernel"""
+
+dynamic = true
+analyze_hook = "dmat.py"
+
+[init]  
+position = "kernel"
+before = """.reg .u64 %start;
+.reg .u64 %mem_clock;
+mov.u64  %start, %clock64; """
+
+[load]
+position = "ld.global:st.global:cp.async.cg:cp.async.ca"
+before = """mov.u64  %mem_clock, %clock64;
+sub.u64 %mem_clock, %mem_clock, %start;
+SAVE.u64 {%mem_clock, ADDR};"""
+datamodel = "thread:16:count"
