@@ -166,121 +166,75 @@ static void init(void) {
  * This is to track the lowering pass from code (binary on disk) to CUfunction
  */
 
+// Triton use this to load data
 CUresult cuModuleLoadData(CUmodule* module, const void* image) {
-    if (shared_lib == NULL)
-        init();
-        
-    // first parse the image
-    int magic, code_type;
-    size_t size;
-    const void *code;
-    void *managed_bin;
-    memcpy(&magic, image, sizeof(int));
-    code_type = check_magic(magic);
-    if (code_type == WRAPPED_FATBIN) { // shall be mapped to real image
-        fatBinaryWrapper wrapper;
-        memcpy(&wrapper, image, sizeof(wrapper));
-        fatBinaryHeader header;
-        memcpy(&header, wrapper.data, sizeof(header));
-        size = get_fatbin_size(&header);
-        code = (const void*) wrapper.data;
-        magic = *(int*) wrapper.data;
-    } else if (code_type == FATBIN) {
-        fatBinaryHeader header;
-        memcpy(&header, image, sizeof(header));
-        size = get_fatbin_size(&header);
-        code = (const void*) image;
-    } else if (code_type == ELF) {
-        Elf64_Ehdr header;
-        memcpy(&header, image, sizeof(header));
-        size = get_elf_size(&header);
-        code = (const void*) image;
-    } else if (code_type == ERROR_TYPE) {
-        // check whether it's text file of NULL-Terminated PTX File
-        // ptx must start with '//' and end with '\0' :)
-        const char* ptx = (const char*) image;
-        if (ptx[0] == '/' && ptx[1] == '/') {
-            size = strlen(ptx); // naturally count till '\0'
-            code = (const void*) image;
-            code_type = PTX;
-        } else { // still unrecognize, report the bug and terminates
-            fprintf(event_log, "[mod] cuModuleLoadData unrecognize %d\n", magic);
-        }
-    }
-    // copy the image to a new managed and protected place
-    managed_bin = malloc(size);
-    memcpy(managed_bin, code, size);
-
+    if (shared_lib == NULL) { init(); }
+    
     // call the real function, after this, module will be valid
     CUresult result = real_cuModuleLoadData(module, image);
 
-    fprintf(event_log, "[mod] cuModuleLoadData %d module %p image %p type %s, size %zu\n", result, *module, image, code_types[code_type], size);
+    fprintf(event_log, "[mod] cuModuleLoadData %d module %p image %p \n", result, *module, image);
+
+    void*  managed;
+    size_t size;
+    if (get_managed_code_size(&managed, &size, image) != -1) {
+        binmap_set(*module, managed, size, NULL); // name = NULL as we don't know it now
+    }
+    
+    return result;
+}
+
+CUresult cuLibraryLoadData(CUlibrary* library, const void* code, CUjit_option* jitOptions, void** jitOptionsValues, unsigned int numJitOptions, CUlibraryOption* libraryOptions, void** libraryOptionValues, unsigned int numLibraryOptions) {
+    if (shared_lib == NULL) { init(); }
+
+    CUresult result = real_cuLibraryLoadData(library, code, jitOptions, jitOptionsValues, numJitOptions, libraryOptions, libraryOptionValues, numLibraryOptions);
+    fprintf(event_log, "[mod] cuLibraryLoadData %d lib %p code %p\n", result, *library, code);
 
     // update to hashmap
-    binmap_set(*module, managed_bin, size, NULL); // name = NULL as we don't know it now
+    void*  managed;
+    size_t size;
+    if (get_managed_code_size(&managed, &size, code) != -1) {
+        binmap_set(*library, managed, size, NULL); // name = NULL as we don't know it now
+    }
 
     return result;
 }
 
 CUresult cuModuleLoadDataEx(CUmodule* module, const void* image, unsigned int numOptions, CUjit_option* options, void** optionValues) {
-    if (shared_lib == NULL)
-        init();
+    if (shared_lib == NULL) { init(); }
 
-    // first parse the image
-    int magic, code_type;
-    size_t size;
-    const void *code;
-    void *managed_bin;
-    memcpy(&magic, image, sizeof(int));
-    code_type = check_magic(magic);
-    if (code_type == WRAPPED_FATBIN) { // shall be mapped to real image
-        fatBinaryWrapper wrapper;
-        memcpy(&wrapper, image, sizeof(wrapper));
-        fatBinaryHeader header;
-        memcpy(&header, wrapper.data, sizeof(header));
-        size = get_fatbin_size(&header);
-        code = (const void*) wrapper.data;
-        magic = *(int*) wrapper.data;
-    } else if (code_type == FATBIN) {
-        fatBinaryHeader header;
-        memcpy(&header, image, sizeof(header));
-        size = get_fatbin_size(&header);
-        code = (const void*) image;
-    } else if (code_type == ELF) {
-        Elf64_Ehdr header;
-        memcpy(&header, image, sizeof(header));
-        size = get_elf_size(&header);
-        code = (const void*) image;
-    } else if (code_type == ERROR_TYPE) {
-        // check whether it's text file of NULL-Terminated PTX File
-        // ptx must start with '//' and end with '\0' :)
-        const char* ptx = (const char*) image;
-        if (ptx[0] == '/' && ptx[1] == '/') {
-            size = strlen(ptx); // naturally count till '\0'
-            code = (const void*) image;
-            code_type = PTX;
-        } else { // still unrecognize, report the bug and terminates
-            fprintf(event_log, "[mod] cuModuleLoadDataEx unrecognize %d\n", magic);
-        }
-    }
-    // copy the image to a new managed and protected place
-    managed_bin = malloc(size);
-    memcpy(managed_bin, code, size);
-    
     CUresult ret = real_cuModuleLoadDataEx(module, image, numOptions, options, optionValues);
     
-    fprintf(event_log, "[mod] cuModuleLoadDataEx mod %p code %p type %s size %zu\n", *module, image, code_types[code_type], size);
+    fprintf(event_log, "[mod] cuModuleLoadDataEx mod %p code %p\n", *module, image);
 
-    // update to hashmap
-    binmap_set(*module, managed_bin, size, NULL); // name = NULL as we don't know it now
+    void*  managed;
+    size_t size;
+    if (get_managed_code_size(&managed, &size, image) != -1) {
+        binmap_set(*module, managed, size, NULL); // name = NULL as we don't know it now
+    }
 
     return ret;
 }
 
+// JAX use this API, but they don't pass in fatbin but cubin, so a wrong API to use...
+CUresult cuModuleLoadFatBinary(CUmodule* module, const void* fatCubin) {
+    if (shared_lib == NULL) { init(); }
+
+    CUresult result = real_cuModuleLoadFatBinary(module, fatCubin); // call the symbol
+
+    fprintf(event_log, "[mod] cuModuleLoadFatBinary mod %p code %p\n", *module, fatCubin);
+
+    void*  managed;
+    size_t size;
+    if (get_managed_code_size(&managed, &size, fatCubin) != -1) {
+        binmap_set(*module, managed, size, NULL); // name = NULL as we don't know it now
+    }
+    return result;
+}
+
 // @todo handle the multiple function with different name problem
 CUresult cuModuleGetFunction(CUfunction* hfunc, CUmodule hmod, const char* name) {
-    if (shared_lib == NULL)
-        init();
+    if (shared_lib == NULL) { init(); }
 
     // first update the name
     size_t len = strlen(name);
@@ -293,32 +247,30 @@ CUresult cuModuleGetFunction(CUfunction* hfunc, CUmodule hmod, const char* name)
     fprintf(event_log, "[mod] cuModuleGetFunction func %p mod %p name %s\n", *hfunc, hmod, name);
 
     // then update the key from module to function
-    int hash_ret = binmap_update_name_key(hmod, *hfunc, managed_name);
-    if (hash_ret == -1)
+    if (binmap_update_name_key(hmod, *hfunc, managed_name) == -1) {
         fprintf(event_log, "[hash] cuModuleGetFunction failed-update %p %p %s\n", hmod, *hfunc, managed_name);
+    }
     
     return result;
 }
 
 CUresult cuKernelGetFunction(CUfunction* pFunc, CUkernel kernel) {
-    if (shared_lib == NULL) 
-        init();
+    if (shared_lib == NULL) { init(); }
 
     CUresult result = real_cuKernelGetFunction(pFunc, kernel);
 
     fprintf(event_log, "[mod] cuKernelGetFunction %p %p\n", *pFunc, kernel);
 
     // then update the key from kernel to function
-    int hash_ret = binmap_update_key(kernel, *pFunc);
-    if (hash_ret == -1) 
+    if (binmap_update_key(kernel, *pFunc) == -1) {
         fprintf(event_log, "[hash] cuKernelGetFunction failed-update %p %p\n", kernel, *pFunc);
+    }
     
     return result;
 }
 
 CUresult cuLibraryGetKernel(CUkernel* pKernel, CUlibrary library, const char* name) {
-    if (shared_lib == NULL)
-        init();
+    if (shared_lib == NULL) { init(); }
 
     // first update the name
     size_t len = strlen(name);
@@ -330,81 +282,24 @@ CUresult cuLibraryGetKernel(CUkernel* pKernel, CUlibrary library, const char* na
     fprintf(event_log, "[mod] cuLibraryGetKernel kernel %p lib %p name %s\n", *pKernel, library, name);
 
     // then update the key from library to kernel
-    int hash_ret = binmap_update_name_key(library, *pKernel, managed_name);
-    if (hash_ret == -1) 
+    if (binmap_update_name_key(library, *pKernel, managed_name) == -1) {
         fprintf(event_log, "[hash] cuLibraryGetKernel failed-update %p %p %s\n", library, *pKernel, managed_name);
+    }
 
     return result;
 }
 
-
 CUresult cuLibraryGetModule(CUmodule* pMod, CUlibrary library) {
-    if (shared_lib == NULL)
-        init();
+    if (shared_lib == NULL) { init(); }
 
     CUresult result = real_cuLibraryGetModule(pMod, library);
 
     fprintf(event_log, "[mod] cuLibraryGetModule %d mod %p lib %p\n", result, *pMod, library);
 
     // then update the key from library to kernel
-    int hash_ret = binmap_update_key(library, *pMod);
-    if (hash_ret == -1)
+    if (binmap_update_key(library, *pMod) == -1) {
         fprintf(event_log, "[hash] cuLibraryGetModule failed-update %p %p\n", library, *pMod);
-    
-    return result;
-}
-
-CUresult cuLibraryLoadData(CUlibrary* library, const void* code, CUjit_option* jitOptions, void** jitOptionsValues, unsigned int numJitOptions, CUlibraryOption* libraryOptions, void** libraryOptionValues, unsigned int numLibraryOptions) {
-    if (shared_lib == NULL)
-        init();
-
-    // first parse the image
-    int magic, bin_type;
-    size_t size;
-    const void *bin;
-    void *managed_bin;
-    memcpy(&magic, code, sizeof(int));
-    bin_type = check_magic(magic);
-    if (bin_type == WRAPPED_FATBIN) { // shall be mapped to real image
-        fatBinaryWrapper wrapper;
-        memcpy(&wrapper, code, sizeof(wrapper));
-        fatBinaryHeader header;
-        memcpy(&header, wrapper.data, sizeof(header));
-        size = get_fatbin_size(&header);
-        bin = (const void*) wrapper.data;
-        magic = *(int*) wrapper.data;
-    } else if (bin_type == FATBIN) {
-        fatBinaryHeader header;
-        memcpy(&header, code, sizeof(header));
-        size = get_fatbin_size(&header);
-        bin = (const void*) code;
-    } else if (bin_type == ELF) {
-        Elf64_Ehdr header;
-        memcpy(&header, code, sizeof(header));
-        size = get_elf_size(&header);
-        bin = (const void*) code;
-    } else if (bin_type == ERROR_TYPE) {
-        // check whether it's NULL-Terminated PTX File
-        // ptx must start with '//' and end with '\0' :)
-        const char* ptx = (const char*) code;
-        if (ptx[0] == '/' && ptx[1] == '/') {
-            size = strlen(ptx); // naturally count till '\0'
-            bin = (const void*) code;
-            bin_type = PTX;
-        } else { // still unrecognize, wait for 
-            fprintf(event_log, "[Mod] cuLibraryLoadData unrecognize %d\n", magic);
-        }
     }
-
-    // copy the image to a new managed place -> won't be free by client
-    managed_bin = malloc(size);
-    memcpy(managed_bin, bin, size);
-
-    CUresult result = real_cuLibraryLoadData(library, code, jitOptions, jitOptionsValues, numJitOptions, libraryOptions, libraryOptionValues, numLibraryOptions);
-    fprintf(event_log, "[mod] cuLibraryLoadData %d lib %p code %p type %s size %zu\n", result, *library, code, code_types[bin_type], size);
-
-    // update to hashmap
-    binmap_set(*library, managed_bin, size, NULL); // name = NULL as we don't know it now
 
     return result;
 }
@@ -417,8 +312,7 @@ CUresult cuLibraryLoadData(CUlibrary* library, const void* code, CUjit_option* j
  */
 
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
-    if (shared_lib == NULL)
-        init();
+    if (shared_lib == NULL) { init(); }
     
     // for time measurement to understand the overhead of Neutrino
     CUevent start_event, end_event;
@@ -840,6 +734,7 @@ backup:
  */
 CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize) {
     if (shared_lib == NULL) { init(); } 
+
     CUresult result = real_cuMemAlloc_v2(dptr, bytesize);
     fprintf(event_log, "[mem] cuMemAlloc_v2 %d dptr %llx bytesize %zu\n", result, *dptr, bytesize);
     return result;
@@ -847,6 +742,7 @@ CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize) {
 
 CUresult cuMemFree_v2(CUdeviceptr dptr) {
     if (shared_lib == NULL) { init(); }
+
     CUresult result = real_cuMemFree_v2(dptr);
     fprintf(event_log, "[mem] cuMemFree_v2 %d dptr %llx\n", result, dptr);
     return result;
@@ -858,15 +754,9 @@ CUresult cuMemFree_v2(CUdeviceptr dptr) {
  */
 CUresult cuModuleLoad(CUmodule* module, const char* fname) {
     if (shared_lib == NULL) { init(); }
+    
     CUresult result = real_cuModuleLoad(module, fname); // call the symbol
     fprintf(event_log, "[info] cuModuleLoad %d\n", result);
-    return result;
-}
-
-CUresult cuModuleLoadFatBinary(CUmodule* module, const void* fatCubin) {
-    if (shared_lib == NULL) { init(); }
-    CUresult result = real_cuModuleLoadFatBinary(module, fatCubin); // call the symbol
-    fprintf(event_log, "[info] cuModuleLoadFatBinary %d\n", result);
     return result;
 }
 
@@ -906,3 +796,4 @@ CUresult cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, cu
    
     return ret;
 }
+*/

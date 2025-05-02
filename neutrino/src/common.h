@@ -19,11 +19,8 @@
 
 /**
  * @todo change probe type to enum for better portability
- * @todo migrate file dump utility to avoid repeating
- * @bug  Compiled library may be loaded by the same process multiple times and
- *       leads to multiple folder being crated. One concrete example is torch
- *       (always load twice). dl_iterate_phdr or RTLD_NOLOAD may help:
- *       @ref https://www.man7.org/linux/man-pages/man3/dl_iterate_phdr.3.html
+ * @todo standardize trace saving, got duplicate codes in cuda.c / hip.c
+ * @todo standardize JIT interaction, got duplicate codes in cuda.c / hip.c
  */
 
 #define PROBE_TYPE_THREAD 0
@@ -330,6 +327,7 @@ typedef struct {
 
 /**
  * Binary Size Calculation based on header because code are of void*
+ * @note Please use unified API get_managed_code_size
  */
 
 #define ELF 1
@@ -367,6 +365,53 @@ static unsigned long long get_elf_size(const Elf64_Ehdr *header) {
 static unsigned long long get_fatbin_size(const fatBinaryHeader *header) {
     // size of fatbin is given by header->size and don't forget sizeof header
     return header->size + sizeof(fatBinaryHeader); 
+}
+
+static int get_managed_code_size(void** managed, size_t* size, const void* bin) {
+    int magic, bin_type;
+    // check the magic number for binary type
+    memcpy(&magic, bin, sizeof(int)); 
+    bin_type = check_magic(magic);
+    const void *code;
+    if (bin_type == WRAPPED_FATBIN) { 
+        fatBinaryWrapper wrapper;
+        memcpy(&wrapper, bin, sizeof(wrapper));
+        fatBinaryHeader header;
+        memcpy(&header, wrapper.data, sizeof(header));
+        *size = get_fatbin_size(&header);
+        code = (const void*) wrapper.data;
+        fprintf(event_log, "[bin] type %s size %zu\n", code_types[bin_type], *size);
+    } else if (bin_type == FATBIN) { 
+        fatBinaryHeader header;
+        memcpy(&header, bin, sizeof(header));
+        *size = get_fatbin_size(&header);
+        code = (const void*) bin;
+        fprintf(event_log, "[bin] type %s size %zu\n", code_types[bin_type], *size);
+    } else if (bin_type == ELF) {
+        Elf64_Ehdr header;
+        memcpy(&header, bin, sizeof(header));
+        *size = get_elf_size(&header);
+        code = (const void*) bin;
+        fprintf(event_log, "[bin] type %s size %zu\n", code_types[bin_type], *size);
+    } else if (bin_type == ERROR_TYPE) {
+        // check whether it's text file of NULL-Terminated ASM File
+        // ptx must start with '//' and end with '\0'
+        // @todo add GCN ASM here
+        const char* ptx = (const char*) bin;
+        if (ptx[0] == '/' && ptx[1] == '/') {
+            *size = strlen(ptx); // naturally count till '\0'
+            code = (const void*) bin;
+            bin_type = PTX;
+            fprintf(event_log, "[bin] type %s size %zu\n", code_types[bin_type], *size);
+        } else { // still unrecognize, report the bug and terminates
+            fprintf(event_log, "[bin] unrecognize %d\n", magic);
+            return -1;
+        }
+    }
+    // copy the image to a new managed and protected place
+    *managed = malloc(*size);
+    memcpy(*managed, code, *size);
+    return 0;
 }
 
 /**

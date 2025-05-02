@@ -78,43 +78,16 @@ static void init(void) {
 hipError_t hipModuleLoadData(hipModule_t* module, const void* image) {
     if (shared_lib == NULL) { init(); }
 
-    // first parse the image
-    int magic, code_type;
-    size_t size;
-    const void *code;
-    void *managed_bin;
-    memcpy(&magic, image, sizeof(int));
-    code_type = check_magic(magic);
-    if (code_type == ELF) {
-        Elf64_Ehdr header;
-        memcpy(&header, image, sizeof(header));
-        size = get_elf_size(&header);
-        code = (const void*) image;
-    } else if (code_type == ERROR_TYPE) {
-        // check whether it's text file of NULL-Terminated AMD GCN File
-        // ptx must end with '\0' :)
-        const char* ptx = (const char*) image;
-        if (ptx[0] == '/' && ptx[1] == '/') {
-            size = strlen(ptx); // naturally count till '\0'
-            code = (const void*) image;
-            code_type = PTX;
-        } else { // still unrecognize, report the bug and terminates
-            fprintf(event_log, "[mod] hipModuleLoadData unrecognize %d\n", magic);
-        }
-    } else {
-        fprintf(event_log, "[mod] hipModuleLoadData unsupported %s\n", code_types[code_type]);
-    }
-
-    // copy the image to a new managed and protected place
-    managed_bin = malloc(size);
-    memcpy(managed_bin, code, size);
-
     hipError_t ret = real_hipModuleLoadData(module, image);
 
-    fprintf(event_log, "[mod] hipModuleLoadData mod %p code %p type %s size %zu\n", *module, image, code_types[code_type], size);
+    fprintf(event_log, "[mod] hipModuleLoadData mod %p code %p\n", *module, image);
 
     // update to hashmap
-    binmap_set(*module, managed_bin, size, NULL); // name = NULL as we don't know it now
+    void*  managed;
+    size_t size;
+    if (get_managed_code_size(&managed, &size, image) != -1) {
+        binmap_set(*module, managed, size, NULL); // name = NULL as we don't know it now
+    }
 
     return ret;
 }
@@ -122,44 +95,16 @@ hipError_t hipModuleLoadData(hipModule_t* module, const void* image) {
 hipError_t hipModuleLoadDataEx(hipModule_t* module, const void* image, unsigned int numOptions, hipJitOption* options, void** optionValues) {
     if (shared_lib == NULL) { init(); }
 
-    // first parse the image
-    int magic, bin_type;
-    size_t size;
-    const void *code;
-    void *managed_bin;
-    memcpy(&magic, image, sizeof(int));
-    code_types = check_magic(magic);
-
-    if (code_type == ELF) {
-        Elf64_Ehdr header;
-        memcpy(&header, image, sizeof(header));
-        size = get_elf_size(&header);
-        code = (const void*) image;
-    } else if (code_type == ERROR_TYPE) {
-        // check whether it's text file of NULL-Terminated AMD GCN File
-        // ptx must end with '\0' :)
-        const char* ptx = (const char*) image;
-        if (ptx[0] == '/' && ptx[1] == '/') {
-            size = strlen(ptx); // naturally count till '\0'
-            code = (const void*) image;
-            code_type = PTX;
-        } else { // still unrecognize, report the bug and terminates
-            fprintf(event_log, "[mod] hipModuleLoadData unrecognize %d\n", magic);
-        }
-    } else {
-        fprintf(event_log, "[mod] hipModuleLoadData unsupported %s\n", code_types[code_type]);
-    }
-
-    managed_bin = malloc(size);
-    memcpy(managed_bin, code, size);
-
     hipError_t ret = real_hipModuleLoadDataEx(module, image, numOptions, options, optionValues);
     
-    fprintf(event_log, "[mod] hipModuleLoadData mod %p code %p type %s size %zu\n", *module, image, code_types[code_type], size);
+    fprintf(event_log, "[mod] hipModuleLoadData mod %p code %p\n", *module, image);
 
     // update to hashmap
-    binmap_set(*module, managed_bin, size, NULL); // name = NULL as we don't know it now
-
+    void*  managed;
+    size_t size;
+    if (get_managed_code_size(&managed, &size, image) != -1) {
+        binmap_set(*module, managed, size, NULL); // name = NULL as we don't know it now
+    }
     return ret;
 }
 
@@ -177,18 +122,14 @@ hipError_t hipModuleGetFunction(hipFunction_t* function, hipModule_t module, con
     fprintf(event_log, "[mod] hipModuleGetFunction func %p mod %p name %s\n", *function, module, kname);
 
     // then update the key from module to function
-    int hash_ret = binmap_update_name_key(module, *function, managed_name);
-    if (hash_ret == -1)
+    if (binmap_update_name_key(module, *function, managed_name) == -1) {
         fprintf(event_log, "[hash] hipModuleGetFunction failed-update %p %p %s\n", module, *function, managed_name);
+    }
     
     return result;
 }
 
-hipError_t hipModuleLaunchKernel(hipFunction_t f, unsigned int gridDimX, unsigned int gridDimY,
-                                 unsigned int gridDimZ, unsigned int blockDimX,
-                                 unsigned int blockDimY, unsigned int blockDimZ,
-                                 unsigned int sharedMemBytes, hipStream_t stream,
-                                 void** kernelParams, void** extra) {
+hipError_t hipModuleLaunchKernel(hipFunction_t f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, hipStream_t stream, void** kernelParams, void** extra) {
     if (shared_lib == NULL) { init(); }
     
     hipEvent_t start_event, end_event;
@@ -240,7 +181,7 @@ hipError_t hipModuleLaunchKernel(hipFunction_t f, unsigned int gridDimX, unsigne
                 fprintf(event_log, "[jit] mkdir %s\n", dir);
             } else {
                 fprintf(event_log, "[jit] can't-mkdir %s\n", dir);
-                    funcmap_set(f, kernel_name, 0, 0, NULL, NULL, false, NULL, NULL); // set status FALSE to prevent recompile fault
+                funcmap_set(f, kernel_name, 0, 0, NULL, NULL, false, NULL, NULL); // set status FALSE to prevent recompile fault
                 goto backup;
             }
             // create original.bin and write the binary to it
@@ -249,7 +190,7 @@ hipError_t hipModuleLaunchKernel(hipFunction_t f, unsigned int gridDimX, unsigne
             FILE* original_bin = fopen(path, "wb");
             if (original_bin == NULL) {
                 fprintf(event_log, "[jit] can't-open %s\n", path);
-                    funcmap_set(f, kernel_name, 0, 0, NULL, NULL, false, NULL, NULL); // set status FALSE to prevent recompile fault
+                funcmap_set(f, kernel_name, 0, 0, NULL, NULL, false, NULL, NULL); // set status FALSE to prevent recompile fault
                 goto backup;
             }
             fwrite(bin, size, 1, original_bin);
