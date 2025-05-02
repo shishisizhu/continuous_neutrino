@@ -16,13 +16,13 @@ It's worth noticing that customized traces, particularly DMAT, can only yield di
 ## Scope (Meta-Information)
 
 * **Design**: Neutrino is a GPU assembly probing tool designed to _attach small code snippets (probes)_ to _GPU kernels at runtime_ to expose runtime execution details (profiling). 
-* **System**: Neutrino system consists of two parts, the probe engine to attach code snippets, and the hook driver to capture GPU kernels launched at runtime. The source code is available at [GitHub](https://github.com/neutrino-gpu/neutrino/tree/artifact) and is installable as a Python package.
+* **System**: Neutrino system consists of two parts, the probe engine to attach code snippets, and the hook driver to capture GPU kernels launched at runtime. The source code is available at [GitHub](https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino) and is installable as a Python package.
 * **Probes**: Neutrino probes are small TOML files that define the profiling task via snippet, datamodel, position, and callback. All probes used in the paper are also available at [GitHub](https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/tools).
 * **Output**: Fig. 1, Fig. 10 (A/B/C), Fig. 11, Fig. 12, Fig. 13, and Table. 2 in the paper.
 * **Evaluations**: We arrange evaluations in notebooks structured linearly, allowing simple click `Runtime -> Run All` execution. Please refer to the [README](https://github.com/neutrino-gpu/neutrino/blob/artifact/README.md), and instructions in each Jupyter Notebook (Colab). 
 * **Special Requirements**: No special requirements for static trace analysis, For dynamic trace collection, a NVIDIA GPU, e.g., A100, and a PTX-included build of PyTorch v2.5.0  and CUTLASS v3.5.0 are required. 
 * **Disk Space Requirements**: Evaluating on Google Colab doesn't require any disk space. Regarding local evaluation, please arrange 3GB for static traces and at least 10GB for collecting dynamic traces.  
-* **Experiment Time**: Less than 30 minutes for static evaluations analyzing collected traces on CPU, and ≈ 7 hours for dynamic evaluation collecting traces on GPU. 
+* **Experiment Time**: Less than 30 minutes for **_static_** evaluations analyzing collected traces on CPU, and ≈ 10 hours for **_dynamic_** evaluation collecting traces on GPU. 
 * **Environment Setup Time**: For **_static_** evaluation, it takes ≈ 2 minutes to download traces. For **_dynamic_** evaluation, it takes ≈ 15 seconds to build NEUTRINO. Setting up PyTorch and CUTLASS might take ≈ 3 minutes.
 * **Publicly Available**: Yes. 
 * **Code License**: We use the Apache License, Version 2.0 for the system source code. 
@@ -51,8 +51,8 @@ and the **dynamic** that collects the traces on the real GPU-enabled environment
 Please choose one of the following to access the artifact:
 
 * **GitHub**:
-  1. **Static** evaluation notebook: [`artifact/static.ipynb`](https://github.com/neutrino-gpu/neutrino/tree//artifact/static.ipynb)
-  2. **Dynamic** evaluation notebook: [`artifact/dynamic.ipynb`](https://github.com/neutrino-gpu/neutrino/tree//artifact/dynamic.ipynb)
+  1. **Static** evaluation notebook: [`artifact/static.ipynb`](https://github.com/neutrino-gpu/neutrino/tree/artifact/artifact/static.ipynb)
+  2. **Dynamic** evaluation notebook: [`artifact/dynamic.ipynb`](https://github.com/neutrino-gpu/neutrino/tree/artifact/artifact/dynamic.ipynb)
 * **Google Colab**:
   1. **Static** evaluation notebook (Use CPU as Runtime) is https://colab.research.google.com/drive/1w2vvjXlOIy00KNwStmSy-rVi2Y0CXfQx?usp=sharing 
   2. **Dynamic** evaluation notebook (Use GPU as Runtime) is https://colab.research.google.com/drive/1Ffg5zWZzvsXxb9vuquBvK0cwSf_SReVt?usp=sharing
@@ -71,21 +71,22 @@ Please note:
 
 NEUTRINO system only depends on GNU toolchain (`gcc`, `file`, `git`, `nm`), CUDA toolchain (`cuobjdump`, `ptxas`) and Python 3.12 (`pip`, `toml`). 
 But evaluation workload needs a PTX-included build of PyTorch and CUTLASS.
-We package the dependency checking and installation in [`prepare_env.py`](https://github.com/neutrino-gpu/neutrino/tree/) for one-click installation.
+We package the dependency checking and installation in [`prepare_env.py`](https://github.com/neutrino-gpu/neutrino/tree/artifact/artifact/prepare_env.py) for one-click installation.
 
 ### Installation
 
 It's recommended to use virtual environments, e.g., `conda`, for installation when not using Colab.
 
-**Automatic Installation**: We provide a helper script [`prepare_env.py`](https://github.com/neutrino-gpu/neutrino/tree/) that one can `python prepare_env.py` to install all dependencies. Jupyter Notebooks (also Google Colab) also use this way.
+**Automatic Installation**: We provide a helper script [`prepare_env.py`](https://github.com/neutrino-gpu/neutrino/tree/artifact/artifact/prepare_env.py) that one can `python prepare_env.py` to install all dependencies and `neutrino`. Jupyter Notebooks (also Google Colab) also use this way.
 
 **Manual Installation**:
 
-    1. Clone the repo: `git clone -b  https://github.com/neutrino-gpu/neutrino.git`
-    2. Create a virtualenv: `conda create -y -n  python=3.12 && conda activate `
-    3. Build and install neutrino: `cd neutrino && python setup.py install && cd ..`
-    4. Test installation with `neutrino --help`
-    Please refer to the README file on GitHub for more detailed descriptions in installing the PTX-included build of PyTorch and CUTLASS.
+1. Clone the repo: `git clone -b artifact https://github.com/neutrino-gpu/neutrino.git`
+2. Create a virtualenv: `conda create -y -n ae_env python=3.12 && conda activate ae_env`
+3. Build and install neutrino: `cd neutrino && python setup.py install && cd ..`
+4. Test installation with `neutrino --help`
+
+Please refer to the README file on GitHub for more detailed descriptions in installing the PTX-included build of PyTorch and CUTLASS.
 
 ## Evaluation Workflow
 
@@ -126,17 +127,18 @@ And if you encountered any problems, please contact us through HotCRP.
 ### Further Evaluation
 
 After completing the above evaluation and reading the documentation, we recommend several ways for further evaluating Neutrino: 
-* **Test your workloads**: Neutrino supports most GPU workloads. You can import your GPU kernels (CUDA C++, Triton, etc) and test them via `neutrino <your workload>`. 
-* **Customize probes**: First, read the Programmable Probe guide, write and save your probe in `.toml` locally, and apply it using `neutrino -p <path>`. 
-* **Investigate Implementation**: Neutrino's implementation is small and well organized, and it's a good entry to understand how GPU code dispatches from OS. You can find the implementation of hook driver in [neutrino/src/](https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/src) and the probe engine in [neutrino/probe](https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/probe).
+* **Test your workloads**: Neutrino supports most GPU workloads. You can import your GPU kernels (CUDA C++, Triton, etc) and test them via `neutrino <your workload>`. Check more on Neutrino's support [here](https://neutrino-gpu.github.io/docs/category/installation-and-support).
+* **Customize probes**: First, read the Programmable Probe guide, write and save your probe in `.toml` locally, and apply it using `neutrino -p <path/to/probe>`. 
+* **Investigate Implementation**: Neutrino's implementation is well organized, and it's a good entry to understand how GPU code dispatches from OS. You can find the implementation of hook driver in [neutrino/src/](https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/src) and the probe engine in [neutrino/probe/](https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/probe).
+* **Track our roadmap**: Neutrino is an actively maintained and developed open-source project. You can track our roadmaps [here](https://neutrino-gpu.github.io/docs/roadmap), and contributions are highly welcome!
 
 ## Badges Checklists
 
-* **Artifacts Available**: The source code of Neutrino is available at https://github.com/neutrino-gpu/neutrino/
+* **Artifacts Available**: The source code of Neutrino is available at https://github.com/neutrino-gpu/neutrino/.
 * **Artifacts Functional**:
   * _Documentation_: We maintain an online documentation at https://neutrino-gpu.github.io/
   * _Completeness_: Our artifacts cover all system components described in the paper (a  complete list in our [GitHub README](https://github.com/neutrino-gpu/neutrino/blob/artifact/README.md)):
     * Hook Driver: https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/src
     * Probe Engine: https://github.com/neutrino-gpu/neutrino/tree/artifact/neutrino/probe
   * _Exercisability_: We package Neutrino as a Python package for easy execution and include all scripts for conducting experiments in the paper. 
-* **Results Reproduced**: To reproduce the main results presented in the paper, we provide Jupyter Notebooks (also on Colab) containing all environment setup, trace collection, and results analysis. We also provide detailed guidelines to help understand results reproduction. 
+* **Results Reproduced**: To reproduce the main results presented in the paper, we provide Jupyter Notebooks (also on Colab) containing all environment setup, trace collection, and results analysis. We also provide detailed guidelines to help understand results reproduction, in [GitHub README](https://github.com/neutrino-gpu/neutrino/blob/artifact/README.md)) and comments in Jupyter Notebooks.
