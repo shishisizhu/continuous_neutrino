@@ -8,7 +8,8 @@ try:
 except:
     # TODO verify if this is included in the clone
     # clone the code from Github
-    subprocess.check_output(["git", "clone", "--branch", "main", "https://github.com/neutrino-gpu/neutrino.git"])
+    branch = os.getenv("NEUTRINO_BRANCH", "artifact")
+    subprocess.check_output(["git", "clone", "--branch", branch, "https://github.com/neutrino-gpu/neutrino.git"])
     subprocess.check_output([sys.executable, "setup.py", "install"], cwd="neutrino")
     print(subprocess.check_output(["neutrino", "--help"]).decode())
 
