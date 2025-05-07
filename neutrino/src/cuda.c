@@ -649,7 +649,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
     size_t offset = sizeof(header) + n_probe * sizeof(trace_section_t);
     for (int idx = 0; idx < n_probe; idx++) {
         trace_section_t section;
-        section.size = probe_sizes[idx]; 
+        section.size = probe_sizes[idx] != -1 ? probe_sizes[idx] : count_size; 
         section.offset = offset;
         offset += (probe_types[idx] == PROBE_TYPE_THREAD) ? gridSize * blockSize * section.size : gridSize * warpSize * section.size;
         fwrite(&section, sizeof(section), 1, fp);
