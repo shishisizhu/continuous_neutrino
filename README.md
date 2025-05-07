@@ -59,7 +59,7 @@ Please choose one of the following to access the artifact:
 
 ### Hardware Requirement
 
-For **static** evaluation, only a CPU machine with Python 3 runtime is needed. You _don't need to install Neutrino_ for static evaluation.
+For **static** evaluation, only a CPU machine with Python 3.11 runtime is needed. You _don't need to install Neutrino_ for static evaluation.
 
 For **dynamic** evaluation, you will need a NVIDIA GPU with the CUDA driver installed. 
 Please note:
@@ -75,16 +75,15 @@ We package the dependency checking and installation in [`prepare_env.py`](https:
 
 ### Installation
 
-It's recommended to use virtual environments, e.g., `conda`, for installation when not using Colab.
+It's recommended to use virtual environments, e.g., `conda`, for installation when not using Colab: `conda create -y -n ae_env python=3.12 && conda activate ae_env`.
 
 **Automatic Installation**: We provide a helper script [`prepare_env.py`](https://github.com/neutrino-gpu/neutrino/tree/artifact/artifact/prepare_env.py) that one can `python prepare_env.py` to install all dependencies and `neutrino`. Jupyter Notebooks (also Google Colab) also use this way.
 
 **Manual Installation**:
 
 1. Clone the repo: `git clone -b artifact https://github.com/neutrino-gpu/neutrino.git`
-2. Create a virtualenv: `conda create -y -n ae_env python=3.12 && conda activate ae_env`
-3. Build and install neutrino: `cd neutrino && python setup.py install && cd ..`
-4. Test installation with `neutrino --help`
+2. Build and install neutrino: `cd neutrino && python setup.py install && cd ..`
+3. Test installation with `neutrino --help`
 
 Please refer to the README file on GitHub for more detailed descriptions in installing the PTX-included build of PyTorch and CUTLASS.
 
