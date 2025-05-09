@@ -75,7 +75,7 @@ def read(path: str) -> List[Param]:
         if line.startswith("[call]") or line.startswith("[ret]"):
             record = line.split("  ") # split by 2 spaces
             ptr=int(record[4])
-            if ptr not in found and ptr in raw_params:
+            if ptr not in found:
                 params.append(Param(
                     ptr = int(record[4]),
                     size = int(record[3]),
@@ -146,6 +146,10 @@ def plot(path: str, params: List[Param]):
     #page_ids: List[int] = []
     counts: List[int] = []
     param_matches: Dict[int, Tuple[List[int], List[int], List[int], str, str]] = {i: ([], [], [], p.shape, p.name) for i, p in enumerate(params)}  # page_id: [(clock, param_index, shape)]
+    
+    # NOTE Fix: Add a unmatched group
+    param_matches[len(param_matches)] = ([], [], [], "Unknown", "Unknown")
+
     # group_matches: Dict[int, Tuple[List[int], List[int], List[int]]] = {i: ([], [], []) for i in range(len(page_group_start))} # page_id -> group_start, group_size
     for clock, items in page_reference_map.items():
         if clock < 5000000: # a useless filter for safety
@@ -154,23 +158,19 @@ def plot(path: str, params: List[Param]):
                 #clocks.append(clock)
                 #page_ids.append(page_id)
                 #counts.append(count)
+                matched = False
                 for i, param in enumerate(params):
                     if param.size > 0 and param.ptr <= page <= param.ptr + param.size: # size is raw bytes
                         param_matches[i][0].append(clock)
                         param_matches[i][1].append(page_id)
                         param_matches[i][2].append(count)
-                    
-                    """
-                    else:
-                        for i in range(len(page_group_start)):
-                            if page_group_start[i] <= page < page_group_start[i] + page_group_sizes[i] * 65536:
-                                group_matches[i][0].append(clock)
-                                group_matches[i][1].append(page_id)
-                                group_matches[i][2].append(1)
-                    """
-                    
+                        matched = True
+                if not matched:
+                    param_matches[len(param_matches) - 1][0].append(clock)
+                    param_matches[len(param_matches) - 1][1].append(page_id)
+                    param_matches[len(param_matches) - 1][2].append(count)
         else:
-            print(f"Find Weird Data {clock}") # might be bugs
+            print(f"Find Weird Data {clock}", file=sys.stderr) # might be bugs
 
     # print(param_matches)
 
