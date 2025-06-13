@@ -154,4 +154,14 @@ cmake -DCUTLASS_NVCC_EMBED_PTX ... # your original command
 ```
 
 ## Citation
-All source code is copyright and the project itself is currently under review.
+If you used Neutrino in your research, please cite the paper below. And we welcome you to send us a link to your paper. 
+```
+@inproceedings{huang2025neutrino,
+    author = {Songlin Huang and Chenshu Wu},
+    title = {Neutrino: Fine-grained GPU Kernel Profiling via Programmable Probing},
+    booktitle = {19th USENIX Symposium on Operating Systems Design and Implementation (OSDI 25)},
+    year = {2025},
+    url = {https://www.usenix.org/conference/osdi25/presentation/huang-songlin},
+    publisher = {USENIX Association},
+}
+```
