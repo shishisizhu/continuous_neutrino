@@ -5,3 +5,4 @@ neutrino/build/config.toml
 neutrino/build/preload.so
 neutrino/build/libcuda.so
 neutrino/build/libcuda.so.1
+.eggs/*

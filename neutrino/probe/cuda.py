@@ -1,6 +1,6 @@
-""" Neutrino Probing Engine """
+"""Neutrino Probing Engine, CUDA Implementation"""
 
-from typing import List, Tuple, Optional, Dict, Set
+from typing import List, Tuple, Dict, Set
 import os
 import sys
 import shutil
@@ -8,6 +8,7 @@ import subprocess
 import traceback # usef for print backtrace to log file instead of stdout
 import toml      # to load probes from envariables
 from dataclasses import dataclass
+from engine import Probe, Ref, safe_load_probes, TRACE_READING_CODE_PY
 
 workdir = sys.argv[1]     # directory contains original.bin
 log = open(os.path.join(workdir, "process.log"), 'w')
@@ -19,26 +20,6 @@ SUPPORTED_DATAMODEL = { "thread": 0, "warp": 1 }
 class KernelParam:
     dtype: str
     name: str
-
-@dataclass
-class Probe:
-    """Neutrino Probes Data Structure"""
-    name: str                       # name is the key in TOML
-    position: List[str]             # := tracepoint in the paper
-    datamodel: Optional[str] = None # 
-    no_bytes:  Optional[str] = None # number of bytes per thread
-    before:    Optional[str] = None # snippet inserted before, one of before and after shall be given
-    after:     Optional[str] = None # snippet inserted after,  one of before and after shall be given
-    store_reg: Optional[str] = None # name of storage register
-    cap:       Optional[int] = -1   # only event-constant has the value
-    no_pred:   Optional[bool] = False # NOTE ignore the original predictive of instruction -> Not recommended
-
-@dataclass
-class Ref:
-    """Reference for replacement"""
-    line: str          # Original line
-    probe: str         # Probe name for matchine
-    before_after: bool # True if before and False if after -> to distinguish which snippet is used
 
 # TODO move it to global variable or configurable
 def get_arch() -> str:
@@ -62,7 +43,7 @@ def get_arch() -> str:
     major, minor = sm_version.split(".")
     return f"sm_{major}{minor}" 
 
-def extract(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
+def dump(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
     """Extract PTX from cuda binaries (cubin or fatbin) via cuobjdump
 
     NOTE accept three kind of binary:
@@ -76,7 +57,7 @@ def extract(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
     out = result.stdout
     if "ASCII text" in result.stdout: # raw PTX file, just read it all
         shutil.copyfile(bin_path, os.path.join(workdir, name) + ".ptx")
-        print("[decompile] bin is ptx", file=log)
+        print("[objdump] bin is ptx", file=log)
         with open(os.path.join(workdir, name) + ".ptx", "r") as outf:
             return outf.read()
     # then try cuobjdump -ptx flag
@@ -92,7 +73,7 @@ def extract(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
         start = out.index(".version") # ptx valid part starts with .version
         with open(os.path.join(workdir, name) + ".ptx", "w") as outf:
             outf.write(out[start:])
-        print("[decompile] via cuobjdump -ptx", file=log)
+        print("[objdump] via cuobjdump -ptx", file=log)
         return out[start:]
     else:
     # finally try cuobjdump -elf to dump elf content and check .nv_debug_ptx_txt
@@ -106,7 +87,7 @@ def extract(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
                 start = section.index(".version")
                 with open(os.path.join(workdir, name) + ".ptx", "w") as outf:
                     outf.write(section[start:])
-                print("[decompile] via cuobjdump -elf", file=log)
+                print("[objdump] via cuobjdump -elf", file=log)
                 return section[start:]
         # if still not found
         raise ValueError("PTX Not Found in CUBIN")
@@ -115,7 +96,7 @@ def prune(ptx: str, entry_name: str) -> Tuple[str, str, str, str]:
     """ a minimum parser to truncate the ptx for specific entry
 
     Use this function to locate a specific entry with entry_name.
-    as Single PTX decompiled usually have > 1 entry, (try cuobjdump -ptx libcublas.so)
+    as Single PTX objdumped usually have > 1 entry, (try cuobjdump -ptx libcublas.so)
 
     NOTE verified on PTX from NVCC GCC Backend and LLVM PTX Backend
     """
@@ -210,6 +191,7 @@ These part shall be placed ONCE at the beginning of every kernel function defini
 if there's any thread-constant probes
 
 Most registers below is duplicate and will be optimized by PTXAS
+TODO Optimize calculation for 1D/2D Indexing (many kernel don't use 3D Indexing
 """
 COMMON_BUFFER_CALC = """// begin buffer calculation
 .reg .b32   %buf<20>;                       // b32 reg to record access, will be optimized by ptxas
@@ -270,13 +252,24 @@ setp.eq.u32 %leader, %warpbuf2, 0;          // check if thread is warp leader
 // end buffer calculation"""
 
 # NOTE buffer location for thread-local buffers, every probe has independent this part
-PROBE_BUFFER = """// begin {name} buffer
+THREAD_PROBE_BUFFER = """// begin {name} buffer
 .reg .b64 %buf_{name}<5>;                         // register group defn
 mul.wide.s32  %buf_{name}4, %buf1, {no_bytes};    // get buffer location, no_bytes is per thread
 ld.param.u64  %buf_{name}3, [param_{name}];       // load address from .param state space
 cvta.to.global.u64 	%buf_{name}2, %buf_{name}3;   // convert address to .global state space
 add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4; // offset to get final thread-specific address
 // end {name} buffer"""
+
+# NOTE buffer of the dynamic stuffs
+THREAD_PROBE_DYNAMIC_BUFFER = """// begin {name} dynamic buffer
+.reg .b64 %buf_{name}<5>;                         // register group defn
+.reg .b32 %cnt_{name};                            // The dynamic count of buffer size
+ld.param.u32  %cnt_{name}, [bytes_{name}];        // load sizes from .param state spaces
+mul.wide.s32  %buf_{name}4, %buf1, %cnt_{name};   // get buffer location, no_bytes is per thread
+ld.param.u64  %buf_{name}3, [param_{name}];       // load address from .param state space
+cvta.to.global.u64 	%buf_{name}2, %buf_{name}3;   // convert address to .global state space
+add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4; // offset to get final thread-specific address
+// end {name} dynamic buffer"""
 
 # NOTE buffer location for warp-local buffers, every probe has independent this part
 WARP_PROBE_BUFFER = """// begin {name} buffer
@@ -287,40 +280,25 @@ WARP_PROBE_BUFFER = """// begin {name} buffer
 @%leader add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4;  // offset to get final thread-specific address
 // end {name} buffer"""
 
-# NOTE Template for Generating Trace Reading Code
-TRACE_READING_CODE_PY = """# Neutrino Auto-Generated Code for Trace Reading
-import struct
-from typing import NamedTuple, List, Tuple
-from neutrino import TraceHeader, TraceSection
-
-class {probe_name}(NamedTuple):
-{saved_content}
-
-def parse(path: str) -> Tuple[TraceHeader, List[TraceSection], List[List[{probe_name}]]]:
-    with open(path, "rb") as f:
-        gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, numProbes = struct.unpack("iiiiiiii", f.read(32))
-        header: TraceHeader = TraceHeader(gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, numProbes)
-        assert header.numProbes == 1 # currently only one saving probe is supported
-        sections: List[TraceSection] = []
-        for _ in range(header.numProbes):
-            size, offset = struct.unpack("QQ", f.read(16))
-            sections.append(TraceSection(size, offset))
-        gridSize = header.gridDimX * header.gridDimY * header.gridDimZ
-        blockSize = header.blockDimX * header.blockDimY * header.blockDimZ
-        records: List[List[{probe_name}]] = []
-        for i in range(gridSize):
-            records.append([])
-            for j in range(blockSize{warp_div}):
-                {saved_reading} = struct.unpack("{format_string}", f.read({reading_bytes}))
-                records[i].append({probe_name}({saved_reading}))
-        return header, sections, records
-"""
-
 # NOTE for every probe with datamodel not none
 # only support .u64 and recommend use 16 bytes alignment, minimum is 8 bytes
 PROBE_PARAM = ".param .u64 param_{name}"
+COUNT_PARAM = ".param .u32 bytes_{name}"
 
-def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
+# NOTE This is a special probe applied if dynamic = True, to be filled with count_inst and count_size
+COUNT_PROBE = """[saving]
+position = "kernel"
+datamodel = "thread:8"
+before = \""".reg .u64 %counter; // counter 
+mov.u64 %counter, 0; // don't forget init it to 0 like C :)\"""
+after = \"""SAVE.u64 %counter;\"""
+
+[counter]
+position = "{count_inst}"
+before = \"""add.u64 %counter, %counter, {count_size};\"""
+"""
+
+def probing(asm: str, probes: List[Probe]) -> Tuple[str, List[int], str]:
     """Process the probes, the core function of probing engine
 
     In general, Take several steps, from:
@@ -331,95 +309,11 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
     4. Adding the PTX Assembly
     """
 
-    def process_probe(raw_probes: Dict[str, dict]) -> List[Probe]:
-        """Turn Raw Probe (dict from toml) into dataclass, also apply restrictions
-
-        NOTE Position must be given, datamodel must be given if want to save, one of before and after must be given
-        """
-        probes: List[Probe] = []
-        for probe_name, raw_probe in raw_probes.items():
-            # first validate the 
-            keys = raw_probe.keys()
-            assert "position" in keys, f"[error] {probe_name} has no position (required)"
-            # assert "datamodel" in keys, f"[error] "
-            assert "before" in keys or "after" in keys, f"[error] {probe_name} is empty, one of before or start shall be given"
-            # gradually process all things
-            if "datamodel" in keys:
-                datamodel: str = raw_probe["datamodel"]
-                if datamodel.startswith("thread") or datamodel.startswith("warp"):
-                    tmp = datamodel.split(":")
-                    datamodel, no_bytes = tmp[0], tmp[1]
-                    cap = 1 if len(tmp) <= 2 else tmp[2] # by default save one item
-                else:
-                    raise ValueError(f"[error] unsupported datamodel {datamodel}")
-            else:
-                datamodel, no_bytes, cap = None, None, -1 # all marked with None
-            probe = Probe(name=probe_name, 
-                          position=raw_probe["position"].split(":") if ":" in raw_probe["position"] else [raw_probe["position"], ],
-                          datamodel=datamodel,
-                          no_bytes=no_bytes,
-                          before=raw_probe["before"] if "before" in keys else None,
-                          after=raw_probe["after"] if "after" in keys else None,
-                          no_pred=raw_probe["no_pred"] if "no_pred" in keys else False,
-                          cap = cap)
-            probes.append(probe)
-        return probes
-    
-    probes: List[Probe] = process_probe(raw_probes=probes)
-
-    def validate_probe(probes: List[Probe]) -> List[Probe]:
-        """Validate probes, including
-        1. Register Access, all registers shall be declared with .reg .type %regname;
-        2. Branch Operation -> Not supported
-        3. Using Shared Memory -> Not supported
-        """
-        safe_probes: List[Probe] = []
-        regs = []
-        for probe in probes:
-            rejected = False
-            if probe.before is not None: 
-                if "bra" in probe.before: 
-                    print("bra is not allowed", file=log)
-                    rejected = True
-                elif ".shared" in probe.before: 
-                    print("shared memory is not allowed", file=log)
-                    rejected = True # NO SHARED MEMORY
-                else:
-                    for line in probe.before.split("\n"):
-                        if ".reg" in line: 
-                            regs.append(line[:line.index(";")].split(" ")[-1])
-                        elif not line.startswith("SAVE"):
-                            out_op = line[:line.index(";")].split(",")[0].split(" ")[-1]
-                            if out_op not in regs: 
-                                print(f"Not allowed to modify undeclared {out_op}", file=log)
-                                rejected = True
-            if probe.after is not None: 
-                if "bra" in probe.after: 
-                    print("bra is not allowed", file=log)
-                    rejected = True
-                elif ".shared" in probe.after: 
-                    print("shared memory is not allowed", file=log)
-                    rejected = True # NO SHARED MEMORY
-                else:
-                    for line in probe.after.split("\n"):
-                        if ".reg" in line: 
-                            regs.append(line[:line.index(";")].split(" ")[-1])
-                        elif not line.startswith("SAVE"):
-                            out_op = line[:line.index(";")].split(",")[0].split(" ")[-1]
-                            if out_op not in regs: 
-                                print(f"Not allowed to modify undeclared {out_op}", file=log)
-                                rejected = True
-            if not rejected:
-                safe_probes.append(probe)
-        return safe_probes
-    
-    probes: List[Probe] = validate_probe(probes)
-
     # NOTE parse interesting locations
     # A mapping from location to probes, a probe can hook at multiple location
     positions: Dict[str, List[Probe]] = dict()
     kernel_start_probes: List[Probe]  = []
-    kernel_end_probes:   List[Probe]  = []
+    kernel_end_probes:   List[Probe]  = [] # TODO remove if really don't need
     # NOTE turn kernel:end into ret:start for better matching
     for probe in probes:
         # different position split by ;, and inside split by : for start/end
@@ -467,7 +361,7 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
                         # NOTE we got a match, then every probe will insert snippet before or after the line
                         # this might cause idx fluctuatting if we use idx to process it
                         line_idx = idx # a copy to fix the insertion position
-                        for probe in probes:
+                        for probe in probes: 
                             # specially handle ret;, we need to place it before ret or it won't be executed
                             if position == "ret;" and probe.after is not None:
                                 ptx_lines.insert(line_idx, Ref(line=line, probe=probe, before_after=False))
@@ -487,7 +381,10 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
     offset: int = 0 # adding every line need to offset 1 to make it correct
     # First let's add parameters
     ptx_lines[param_end_line] = ptx_lines[param_end_line] + "," # add , to indicate more param
+    # NOTE parameter layouts: Parameters are pointers to buffer, or buffer size
+    # We arange buffer pointers linearly in advance (u64), and later size (u32)
     params_added: List[str] = []
+    count_params: List[str] = [] # NOTE used for dynamic counts only
 
     # NOTE save the probe_mem_sizes so Hook Driver has a way to load the stuff back
     # we must make sure this is aligned with the order of parameter or will be illegal access
@@ -497,11 +394,19 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
     datamodels: Set[str] = set()
     for probe in probes + kernel_start_probes:
         if probe.name not in processed and probe.datamodel is not None:
-            probe_mem_sizes.append((probe.datamodel, int(probe.cap) * int(probe.no_bytes)))
-            params_added.append(PROBE_PARAM.format(name=probe.name))
-            processed.add(probe.name)
-            datamodels.add(probe.datamodel)
+            if probe.cap != "count":
+                probe_mem_sizes.append((probe.datamodel, int(probe.cap) * int(probe.no_bytes)))
+                params_added.append(PROBE_PARAM.format(name=probe.name))
+                processed.add(probe.name)
+                datamodels.add(probe.datamodel)
+            else:
+                probe_mem_sizes.append((probe.datamodel, -1))
+                params_added.append(PROBE_PARAM.format(name=probe.name))
+                count_params.append(COUNT_PARAM.format(name=probe.name))
+                processed.add(probe.name)
+                datamodels.add(probe.datamodel)
         # else just ignore
+    params_added = params_added + count_params # formulate the layout
     ptx_lines.insert(param_end_line + 1, ",\n".join(params_added))
     offset += 1 # in total one line is added 
     # Now add the probe with kernel:start -> this shall not dump anything I think
@@ -521,10 +426,15 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
     for probe in probes + kernel_start_probes:
         if probe.name not in processed:
             if probe.datamodel == "thread":
-                no_bytes = str(int(probe.cap) * int(probe.no_bytes))
-                ptx_lines.insert(body_start_line + offset + 1, 
-                                PROBE_BUFFER.format(name=probe.name, no_bytes=no_bytes))
-                offset += 1
+                if probe.cap != "count":
+                    no_bytes = str(int(probe.cap) * int(probe.no_bytes))
+                    ptx_lines.insert(body_start_line + offset + 1, 
+                                    THREAD_PROBE_BUFFER.format(name=probe.name, no_bytes=no_bytes))
+                    offset += 1
+                else:
+                    ptx_lines.insert(body_start_line + offset + 1, 
+                                    THREAD_PROBE_DYNAMIC_BUFFER.format(name=probe.name))
+                    offset += 1
             elif probe.datamodel == "warp":
                 no_bytes = int(probe.cap) * int(probe.no_bytes)
                 ptx_lines.insert(body_start_line + offset + 1,
@@ -552,11 +462,14 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
             for operand in tmp:
                 if "{" in operand and not "}" in operand:
                     merging = True
+                    merges.append(operand)
                 elif "}" in operand and not "{" in operand:
+                    merges.append(operand) # FIX, now operand is the last one and shall be included
                     operands.append(",".join(merges).strip("{} ")) # we don't want {} remains
                     merges = []     # flush merges
                     merging = False # reset status
-                operands.append(operand) if not merging else merges.append(operand)
+                else:
+                    operands.append(operand) if not merging else merges.append(operand)
             # first operand also have pred, inst and the real first operand
             remaining = operands[0].strip() if len(operands) > 0 else print(line, tmp, operands, merges)
             # handle predicate -> used in final insertion
@@ -567,6 +480,7 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
                 pred = ""
             # TODO assert matching instruction
             mem_bytes: str = None
+            out: str = None
             if remaining.find(" ") != -1:          
                 inst = remaining[:remaining.index(" ")]
                 # NOTE a helper to calculate bytes, ld and st's bytes are inferred not from operand
@@ -590,14 +504,25 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
             in1:  str = operands[1] if len(operands) >= 2 else None
             # NOTE handle [ addr ] used to indicate the memory address
             in1 = in1[in1.index("[") + 1 : in1.index("]")] if in1 is not None and "[" in in1 else in1
-            in2:  str = operands[2] if len(operands) >= 3 else None
-            in3:  str = operands[3] if len(operands) >= 4 else None
+            in2 = operands[2] if len(operands) >= 3 else None
+            in3 = operands[3] if len(operands) >= 4 else None
+            # TODO handle some weird syntax like + 0 used meaninglessly to locate correct places
+            # Currently only a minimal solution
+            if out is not None and "+" in out: out = out[:out.find("+")]
+            if in1 is not None and "+" in in1: in1 = in1[:in1.find("+")]
+            # print(line, out, in1, in2, sep=" / ")
             # now handles operand helpers by directly replacing the value
             snippet = probe.before if before_after else probe.after
             snippet = snippet.replace("OUT", out) if "OUT" in snippet else snippet
             snippet = snippet.replace("IN1", in1) if "IN1" in snippet else snippet
             snippet = snippet.replace("IN2", in2) if "IN2" in snippet else snippet
             snippet = snippet.replace("IN3", in3) if "IN3" in snippet else snippet
+            # NOTE add a new helper named ADDR referencing gmem address
+            if "ADDR" in snippet:
+                if "ld" in operands[0] or "cp.async" in operands[0]:
+                    snippet = snippet.replace("ADDR", in1)
+                elif "st" in operands[0]: # st has 
+                    snippet = snippet.replace("ADDR", out)
             if mem_bytes is not None:
                 snippet = snippet.replace("BYTES", mem_bytes) if "BYTES" in snippet else snippet
             # now handles STORE helpers
@@ -620,7 +545,11 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
                     # example SAVE.u64 {%gstart, %gend}; or SAVE.u32 {%smid, %nsmid}; 
                     dtype = snippet_line[snippet_line.find("SAVE") + 5: snippet_line.find("SAVE") + 8]
                     save_lines = [] # start a new string
-                    items = snippet_line[snippet_line.index("{") + 1:snippet_line.index("}")].split(",")
+                    if "{" in snippet_line:
+                        items = snippet_line[snippet_line.index("{") + 1:snippet_line.index("}")].split(",")
+                    else:
+                        items = [snippet_line[snippet_line.find("SAVE") + 8: snippet_line.find(";")].strip(), ]
+                    # print(items)
                     if dtype == "u64":
                         for item_idx in range(len(items) // 2): # try to generate vectorized!
                             save_lines.append(f"{pred}st.global.v2.u64 [%buf_{probe.name}1],  {{ {items[item_idx * 2]}, {items[item_idx * 2 + 1]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 16;")
@@ -674,7 +603,7 @@ def probing(asm: str, probes: Dict[str, dict]) -> Tuple[str, List[int], str]:
     # Finally finished.1
     return "\n".join(ptx_lines), probe_mem_sizes, trace_reading_code
 
-def compile_ptx_to_bin(workdir: str, name: str) -> str:
+def assemble(workdir: str, name: str) -> None:
     """compile the ptx into cubin via ptxas
     NOTE: ptxas command like `ptxas -arch=sm_80 --verbose -m64  "original.ptx"  -o "original.cubin"` 
     * This is not actually need for running because CUDA Driver cuModuleLoad can load PTX (JIT),
@@ -739,9 +668,9 @@ def write_kernel_info(name: str, params: List[KernelParam], probe_mem_sizes: Lis
         if analyze_hook != "" and not analyze_hook.startswith("/"): 
             analyze_hook = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", analyze_hook)
         print(analyze_hook, file=f)
-        # NOTE: following are referencing stuff not really used by hook driver
-        for param in params:
-            print(f"{param.name},{param.dtype}", file=f)
+        # # NOTE: following are referencing stuff not really used by hook driver
+        # for param in params:
+        #     print(f"{param.name},{param.dtype}", file=f)
 
 # ENTRY for this tool
 if __name__ == "__main__":
@@ -770,12 +699,21 @@ if __name__ == "__main__":
     # parse the environment variable for filtered out kernel, this is for
     # 1. Some buggy kernels caused system fails -> many GPU error is not recoverable
     # 2. Some uninterested kernels such as vectorized_elementwise for PyTorch
-    filter_out = os.environ.get("NEUTRINO_FILTER", "").split(":")
+    filter_out = os.environ.get("NEUTRINO_FILTER", "")
+    filter_out = filter_out.split(":") if len(filter_out) > 0 else None
     print(filter_out, file=log)
+    
+    filter_in = os.environ.get("NEUTRINO_KERNEL", "")
+    filter_in = filter_in.split(":") if len(filter_in) > 0 else None
+    print(filter_in, file=log)
+    
+    # NOTE check if some probe is defined as dynamic, if so, we need to add a counter
+    #      for these probes in different arangements
+    dynamic = bool(os.environ.get("NEUTRINO_DYNAMIC", 0)) 
 
     try:
-        # first decompile binary to ptx
-        ptx = extract(workdir)
+        # first objdump binary to ptx
+        ptx = dump(workdir)
         # then truncate ptx for entry_name
         global_section, func_section, entry_section, _ = prune(ptx, kernel_name)
         # split and process ptx lines and write kernel info
@@ -783,15 +721,42 @@ if __name__ == "__main__":
 
         # basic logging
         print(kernel_name, file=log)
-        for tmp in filter_out:
-            if tmp != "" and tmp in kernel_name:
-                print(f"{kernel_name} filtered out from {filter_out}", file=log)
+        if filter_in:
+            matched = False
+            for tmp in filter_in:
+                if tmp in kernel_name:
+                    matched = True
+            if not matched:
+                print(f"{kernel_name} is not in {filter_in}", file=log)
                 exit(1)
+        if filter_out:
+            for tmp in filter_out:
+                if tmp != "" and tmp in kernel_name:
+                    print(f"{kernel_name} filtered out from {filter_out}", file=log)
+                    exit(1)
 
         # write pruned ptx to file
         pruned_ptx = global_section + "\n" + func_section + "\n" + entry_section
         with open(os.path.join(workdir, "pruned.ptx"), "w") as f:
             f.write(pruned_ptx)
+
+        # convert probes from Python Dict to data structure
+        probes: list[Probe] = safe_load_probes(raw_probes=probes)
+
+        if dynamic:
+            # First check the probe with size is dynamic, aka size = -1
+            count_inst = ""
+            count_size = 0
+            for probe in probes:
+                if probe.cap == "count":
+                    count_inst = ":".join(probe.position) # NOTE can not do for kernel
+                    count_size = probe.no_bytes
+            count_probe = COUNT_PROBE.format(count_inst = count_inst, count_size = count_size)
+            count_probe = safe_load_probes(toml.loads(count_probe))
+            count_ptx, count_mem_sizes, _ = probing(entry_section, count_probe)
+            count_ptx = global_section + "\n" + func_section + "\n" + count_ptx
+            with open(os.path.join(workdir, "countd.ptx"), "w") as f:
+                f.write(count_ptx)
 
         # process ptx lines
         probed_ptx, probe_mem_sizes, trace_reading_code = probing(entry_section, probes)
@@ -807,8 +772,12 @@ if __name__ == "__main__":
         write_kernel_info(kernel_name, params, probe_mem_sizes, workdir, analyze_hook)
 
         # compile ptx to binary, we want both probed and pruned
-        compile_ptx_to_bin(workdir, "probed")
-        compile_ptx_to_bin(workdir, "pruned")
+        assemble(workdir, "probed")
+        assemble(workdir, "pruned")
+        if dynamic:
+            with open(os.path.join(workdir, "countd.ptx"), "w") as f:
+                f.write(count_ptx)
+            assemble(workdir, "countd")
 
         print(trace_reading_code, file=log)
 
