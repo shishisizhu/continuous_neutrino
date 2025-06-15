@@ -1,157 +1,192 @@
-# NEUTRINO: Fine-grained GPU Kernel Profiling via Programmable Probing
+# Neutrino
 
-This is the development repository of Neutrino, a GPU observability platform based on programmable probing like eBPF for Linux.
-Neutrino aims to provide another programmable interface inside GPU Kernel other than AOT/JIT programming to flexibily observe its runtime behavior under black-box environment. 
-For observability, Neutrino mainly features:
+by [Huang Songlin](https://huangs0.github.io) and [Wu Chenshu](https://cswu.me).
 
-1. Fine-granularity: `neutrino` directly works on instructions, the lowest software level, to offer the finest granularity that can be effectively mapped to particular hardware units like tensor core.
-2. Programmability: `neutrino` extends the programmability of previous instrumentation tools (NvBit, GTPin, HIPAnalyzer) by probe cooperation with registers as temporal storage
-3. Versatility: `neutrino` supports both value profiling (capturing register value in runtime like memory address) and value profiling (capturing timestamp of operation via reading clock).
+Neutrino is a Probing-based GPU Kernel Profiler providing eBPF-like user experience for GPU Kernel Profiling, targeting:
 
-> [!NOTE]  
-> 🥳We are delighted to share that AMD ROCm/HIP Support is now Alpha🥳 Please use `git clone --branch rocm https://github.com/open-neutrino/neutrino`.
-> Please kindly check the branch of `rocm` for more details! Current support is not stable and we will continue updating to resolve bugs!
+1. **Fine-granularity**: Directly works on instructions to offer the finest granularity that can be mapped to particular hardware units.
+2. **Programmability**: Extends the programmability of previous tools to probe cooperation with probe
+3. **Versatility**: Supports both value profiling (register value like memory address) and value profiling (timestamp from device-side clock).
+4. **Hardware-Independence**: Support both NVIDIA/CUDA and AMD/ROCm, more platforms to come!
+5. **Ecosystem-Compatibility**: Built-in compatible with PyTorch (and everything on top like Huggingface), JAX, Triton, CUTLASS...
 
-Check our demo hosted on Colab:
+The foundations of this project are described in our OSDI '25 publication: [Neutrino: Fine-grained GPU Kernel Profiling via Programmable Probing](https://www.usenix.org/conference/osdi25/presentation/huang-songlin). Please consider citing this work if you use Neutrino!
+The official documentation contains more installation instructions, tutorials, internals and the DMAT galley!
 
+## Latest News
+* May 31, 2025: [Neutrino's artifact](https://github.com/open-neutrino/neutrino/tree/artifact) received all [badges](https://sysartifacts.github.io/osdi2024/badges) (Available, Functional, Reproduced) from OSDI 25 Artifact Evaluation!
 
-## Installtion
-As the project is still in preview, please install from source via:
+## Quick Start
+
+### Demos
+
+Following demos are hosted on Colab with simple click `Runtime -> Run All`:
+
+### Installation
+
+Neutrino can be installed as a Python package from source. Building is fast (<30 seconds)!
 
 ```bash
-git clone https://github.com/neutrino-gpu/neutrino
-cd neutrino && python setup.py install
-neutrino --help # test installation and system config
+# Virtual Environmnt is highly recommended!
+conda create conda create -y -n <name> python=3.11 && conda activate <name>
+git clone https://github.com/open-neutrino/neutrino
+cd neutrino && python setup.py install && cd ..
+neutrino --help # test installation
 ```
 
-Please note `pip install neutrino` will install another old project! We're still working with pip installation.
+Neutrino does not have pre-build wheels, please **DO NOT** `pip instsall neutrino`!
 
-## Probing Guide
+## Using Neutrino
 
 Inspired by [eBPF](https://ebpf.io/what-is-ebpf/), `probe` in Neutrino refers to a tiny sandboxed code snippet that could be attached to the GPU kernel at the assembly level (PTX, GCNAsm, SPIR-V) in the runtime. 
-`probe` extends a new programmable space than traditional AOT/JIT programming and provides a convenient way for observability to black-boxed GPU runtime.
+`probe` extends a new programmable interface than traditional programming and provides a convenient way for observability to black-boxed GPU runtime.
+Currently Neutrino probes support two programming ways:
+1. Pythonic Tracing DSL, suitable for beginners.
+2. Direct Assembly probes wrapped in [TOML](https://toml.io/en/), suitable for advanced usage but it is platform-dependent.
 
-Currently Neutrino probes are written directly in assembly and are organized in [TOML](https://toml.io/en/), like the following example:
+<table style="width:50%">
+<tr>
+<td valign="top">
 
+### Pythonic Tracing DSL
+```python
+from neutrino import probe, Map
+import neutrino.language as nl
+CALLBACK = "block_sched.py" # for trace analysis
+# declare maps for persistence
+@Map(level="warp", type="array", size=16, cap=1)
+class block_sched:
+  start: nl.u64
+  elapsed: nl.u32
+  cuid: nl.u32
+# declare probe registers shared across probes
+start: nl.u64 = 0 # starting clock
+elapsed: nl.u64 = 0 # elapsed time, initialized to 0
+# define probes with decorator
+@probe(pos="kernel", level="warp", before=True)
+def thread_start():
+  start = nl.clock()
+@probe(pos="kernel", level="warp")
+def thread_end():
+  elapsed = nl.clock() - start
+  block_sched.save(start, elapsed, nl.cuid())
+```
+
+</td>
+<td valign="top">
+
+### Direct Assembly wrapped in TOML
 ```toml
-analyze_hook = "block_sched_local.py"
-
-[block_sched]
+# CUDA PTX Assembly Example
+callback="block_sched.py"
+[ map.block_sched ]
+type = "array"
+level = "warp"
+size = "16"
+cap = "1"
+[ probe.thread_start_thread_end ]
 position = "kernel"
-datamodel = "warp:16" # every warp save 16 bytes
-before = """.reg .b64 %lstart; // local start time (unit: cycle)
-.reg .b64 %lend;    // local end time (unit: cycle)
-.reg .b64 %elapsed; // thread elapsed time in u64
-.reg .b32 %elapse;  // thread elapsed time in u32
-mov.u64 %lstart, %clock64;"""
-# following operation is done only by leader thread
-after = """mov.u64 %lend, %clock64;
-sub.u64 %elapsed, %lend, %lstart; 
-cvt.u32.u64 %elapse, %elapsed; // convert to u32
-SAVE.u64 {%lstart}; // store start in u64 for alignment
-SAVE.u32 {%elapse, %smid}; // store elapased time and core id"""
+level = "warp"
+register = {"u32": 2, "u64": 3}
+before = """.reg .b64 %PD<3>;
+.reg .b32 %P<2>;
+mov.u64 %PD0, %clock64;"""
+after = """mov.u64 %PD1, %clock64;
+sub.u64 %PD1, %PD1, %PD0;
+cvt.u32.u64 %P1, %PD1;
+mov.u32 %P2, %smid;
+SAVE [ block_sched ] {%PD0, %P1, %P2};"""
 ```
 
-Every nested dict is treated as a probe, and more than one probe is allowed and welcomed (for cooperation)! For each probe, there are several keywords:
-* `name` of probe is implicitly given as name of nested dict, e.g., `block_sched` in this example.
-* `position` defines where probe will be inserted, `kernel` means this is a kernel-level probe. You can give any valid instruction as position.
-* `datamodel` defines how your data will be dumped, supporting `warp` and `block` with integer as unit in bytes. `warp:16` means every warp will save 16 bytes.
-* `before` and `after` define probe snippet to be inserted before and after position. They're written in assembly that you can operate registers and save profiling results.
+</td>
+</tr>
+</table>
 
-We also extend some helpers for your convenience:
-* `SAVE`: will be replaced by instructions to save results
-* `OUT`, `IN1`, `IN2`, `IN3`: will be replaced by register name of operands.
+The interface of `@neutrino.Probe` is inspired by [Triton](https://triton-lang.org/main/index.html) whose contents (left) will be compiled, rather than executed, into platform-specific assemblies (right). 
+Probes of same `level` and `pos` will be merged.
 
-Additionaly, `analyze_hook` is path/to/analyze_script that would be automatically executed after each trace dump for workflow automation.
+The formulation (and the name) of `@neutrino.Map` is prompted by [eBPF Map](https://docs.ebpf.io/linux/concepts/maps/). With structured definition, Neutrino can have save (no illegal memory access) and efficient (race-free, no atomics) persistence. 
 
-## Implementation Details and Hacking
-`neutrino` is designed to operate in the following workflow:
-
-<img src="assets/workflow.png" alt="workflow" width="500"/>
-
-It's centralized with Hooked Driver (catching GPU request, allocating and saving buffer) and Probe Engine (parsing and matching assembly to attach probe), and they're placed in the following code structure:
-
-```
-neutrino
-├── build
-│   └── process.py # Probe Engine implemented
-├── src
-│   ├── common.h   # Hooked Driver Defn
-│   ├── modified.c # Hooked Driver Impl
-│   ├── preload.c  # for LD_PRELOAD
-│   ├── parse.py   # Parse Unhooked CUDA ABI
-│   ├── unmodified.c # generated by parse.py
-│   ├── signature.c  # generated by parse.py
-│   ├── sha1.h   # third-parties
-│   └── uthash.h # third-parties
-```
-
-We welcome every developer hacking the probe engine in `neutrino/build/process.py` to extend the functionality of Neutrino. This is implemented in Python with while performance degradation covered by code cache.
-
-Please raise an issue if you want to modify the hook driver.
+To simplify the development, Neutrino also provides some helper functions / operands:
+* `nl.clock() / nl.time()`: for reading device-side clock and timer.
+* `nl.addr/out/in1/in2/in3`: for reading register values
+* `Map.save()`: for persisting values for posterior analysis.
 
 ## Compatibility
+
+More information can be found in our documentation. If you have more platforms or workloads need the support, please raise an issue to let us know!
+
+<table style="width:50%">
+<tr>
+<td valign="top">
+
 ### Hardware
-Currently neutrino supports NVIDIA GPUs with CUDA and AMD GPUs with ROCm. Our plan to support other platforms is summarized here:
+
 
 | Hardware Platform	| Support Status |
 | --- | --- |
 | NVIDIA/CUDA/PTX	| ✅ Supported | 
-| AMD/ROCm/GCNAsm |	🏗️ Working |
+| AMD/ROCm/GCNAsm |	🛠️ Testing |
 | General/OpenCL/SPIR-V	| 🚀 Planning |
 
+</td>
+<td valign="top">
+
 ### Software
-Current software support mainly targets AI/ML workloads, and we welcome contributions on testing `neutrino` on other frameworks and workloads. Support Matrix is summarized below:
 
 | Software Framework | Status | 
 | --- | --- |
 | cuBLAS/cuFFT/cuSparse...	| ❌ (no plan for supporting) |
 | CUTLASS	| ✅ (with macro in building) |
-| PyTorch family (torchvision...) | 	✅ (with manual building) |
-| JAX	| 🛠️ (Testing) | 
-| Triton	| ✅ (with envariable in runtime) |
-| NCCL | 🛠️ (Testing) |
+| PyTorch family (torchvision...) | ✅ (with custom build) |
+| JAX	| ✅ (with envariable in runtime) | 
+| Triton	| ✅ |
 
-Please check below for more details:
+</td>
+</tr>
+</table>
 
-#### cuBLAS/cuDNN
+## Internals
 
-`neutrino` does not support these NVIDIA proprietary products for several reasons:
-1. NVIDIA updates its [EULA](https://docs.nvidia.com/cuda/eula/index.html) on decompile/disassemble these propietary products.
-2. These propietary product heavily used [dark apis](https://news.ycombinator.com/item?id=39346108), which is out of the scope.
-3. Even if observation is made, optimization by developers is impossible as they are closed source.
+`neutrino` is designed to operate in the following workflow:
 
-Unfortunately, some drawbacks from not supporting cuBLAS/cuFFT:
-* PyTorch's `nn.Linear` and other matmul / conv operations can not be traced -> consider using `CUTLASS` instead.
+<img src="assets/workflow.png" alt="workflow" width="500"/>
 
-#### PyTorch
-Support for PyTorch requires manual building to store PTX Assembly in installation (by default, PyTorch uses FindCUDA macro of CMak,e which keeps only SASS):
+The source code are placed in the following structure:
 
-1. Clone the PyTorch: `git clone --recursive https://github.com/pytorch/pytorch`, add `--branch` to specify the branch if needed
-2. Following the [guide](https://github.com/pytorch/pytorch?tab=readme-ov-file#install-dependencies) to install dependnecies.
-3. Query compute capability via `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`
-4. Modify the fatbin setting and add NVCC flags in `pytorch/CMakeLists.txt`, see below code block.
-5. Follow the [guide](https://github.com/pytorch/pytorch?tab=readme-ov-file#install-pytorch) to build and install PyTorch.
-
-```cmake
-# pytorch/CMakeLists.txt, around line 660, comment out next line
-# string(APPEND CMAKE_CUDA_FLAGS " -Xfatbin -compress-all")
-# add the following two line:
-string(APPEND CMAKE_CUDA_FLAGS " -Xfatbin --compress=false")
-string(APPEND CMAKE_CUDA_FLAGS " -gencode arch=compute_80,code=compute_80")
+```
+neutrino
+├── language # DSL and Compiler, Still in Testing
+│   ├── __init__.py # Common Defn and Exported API
+│   ├── frontend.py # Parser and AST Transformer
+│   ├── cuda.py     # CUDA PTX Codegen
+│   └── hip.py      # AMD ROCm Codegen
+├── probe    # Probe Engine
+│   ├── __init__.py # Empty, no export
+│   ├── engine.py   # Common Definition and Utilities
+│   ├── cuda.py     # CUDA PTX Impl
+│   └── hip.py      # AMD ROCm Impl
+├── src      # Hook Driver
+│   ├── common.h    # Platform-agnostic Definition (GNU-only)
+│   ├── cuda.c      # CUDA Impl (NVIDIA-related)
+│   ├── hip.c       # ROCm Impl (AMD-related)
+│   ├── preload.c   # Injector via LD_PRELOAD
+│   ├── parse.py    # Generate Unhook API (NVIDIA/AMD)
+│   ├── sha1.h      # third-parties header-only library
+│   └── uthash.h    # third-parties header-only library
+├── build.py    # Builder for driver in src/
+├── cli.py      # Command Line Interface Entry
+└── __init__.py # Common Definitions like probe, Map
 ```
 
-#### Triton
-We recommend Triton users configure the `TRITON_CACHE_DIR` environment variable when using `neutrino` for profiling. This can be set to any value, such as a local folder `cache/` via `TRITON_CACHE_DIR=cache` in bash.
+The overall structure is clean and approachable, we welcome developers to hack the system for their need. Raise issues if you need help.
 
-And if you run into any problem, clear the existing Triton build with `rm -rf cache`. This will force Triton to rebuild everything, particularly its launcher. This is because Triton statically links its launcher instead of dynamically opening, so one needs to clearthe  build to force Triton to find the correct driver (hooked or unhooked).
+## More 
 
-#### CUTLASS
-Please follow the [guide](https://github.com/NVIDIA/cutlass/blob/main/media/docs/quickstart.md) , but switch on an internal macro `CUTLASS_NVCC_EMBED_PTX` in building via `cmake`:
-
-```bash
-cmake -DCUTLASS_NVCC_EMBED_PTX ... # your original command
-```
+* How are probes executed? Check the Probe Execution Model.
+* How to read the neutrino trace? Check the Trace File Structure.
+* How to extend the system? Check Extending Neutrino.
+* How good is Neutrino? Check System Performance.
 
 ## Citation
 If you used Neutrino in your research, please cite the paper below. And we welcome you to send us a link to your paper. 
