@@ -1,6 +1,6 @@
 # Neutrino
 
-by [Huang Songlin](https://huangs0.github.io) and [Wu Chenshu](https://cswu.me).
+by [Huang Songlin](https://huangs0.github.io) and [Wu Chenshu](https://cswu.me) from the University of Hong Kong.
 
 Neutrino is a Probing-based GPU Kernel Profiler providing eBPF-like user experience for GPU Kernel Profiling, targeting:
 
@@ -11,7 +11,7 @@ Neutrino is a Probing-based GPU Kernel Profiler providing eBPF-like user experie
 5. **Ecosystem-Compatibility**: Built-in compatible with PyTorch (and everything on top like Huggingface), JAX, Triton, CUTLASS...
 
 The foundations of this project are described in our OSDI '25 publication: [Neutrino: Fine-grained GPU Kernel Profiling via Programmable Probing](https://www.usenix.org/conference/osdi25/presentation/huang-songlin). Please consider citing this work if you use Neutrino!
-The official documentation contains more installation instructions, tutorials, internals and the DMAT galley!
+The [official documentation](https://open-neutrino.github.io) contains more installation instructions, tutorials, internals and the DMAT galley!
 
 ## Latest News
 * May 31, 2025: [Neutrino's artifact](https://github.com/open-neutrino/neutrino/tree/artifact) received all [badges](https://sysartifacts.github.io/osdi2024/badges) (Available, Functional, Reproduced) from OSDI 25 Artifact Evaluation!
@@ -21,6 +21,12 @@ The official documentation contains more installation instructions, tutorials, i
 ### Demos
 
 Following demos are hosted on Colab with simple click `Runtime -> Run All`:
+
+| Demo | Colab Link|
+|---|---|
+| Unrevealing block scheduling cost of `torch.zeros` | <a href="https://colab.research.google.com/drive/1rhIsfQnV1OwGIud8dSSFrod7AIvsA2cB?usp=sharing" target="_blank" rel="noopener noreferrer">  ![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg) </a> |
+| Visualizing FlashAttn-v2 Memory Access | <a href="https://colab.research.google.com/drive/1RTcJfn32Ocx9B_icgpiDiC2WEHTKp1JB?usp=sharing" target="_blank" rel="noopener noreferrer">  ![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg) </a>|
+| Warp Scheduling and Tailing Effect | <a href="https://colab.research.google.com/drive/1P50vzbkkgrbF-fVh1rcEe4YdHHUuq1tE?usp=sharing" target="_blank" rel="noopener noreferrer">  ![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg) </a> |
 
 ### Installation
 
@@ -157,13 +163,13 @@ The source code are placed in the following structure:
 ```
 neutrino
 ├── language # DSL and Compiler, Still in Testing
-│   ├── __init__.py # Common Defn and Exported API
+│   ├── __init__.py # DSL Primitive
+│   ├── compiler.py # Exported Compiler API
 │   ├── frontend.py # Parser and AST Transformer
-│   ├── cuda.py     # CUDA PTX Codegen
-│   └── hip.py      # AMD ROCm Codegen
+│   ├── cuda.py     # CUDA PTX Codegen Backend
+│   └── hip.py      # AMD ROCm Codegen Backend
 ├── probe    # Probe Engine
-│   ├── __init__.py # Empty, no export
-│   ├── engine.py   # Common Definition and Utilities
+│   ├── __init__.py # Common Definition and Utilities
 │   ├── cuda.py     # CUDA PTX Impl
 │   └── hip.py      # AMD ROCm Impl
 ├── src      # Hook Driver
@@ -176,17 +182,19 @@ neutrino
 │   └── uthash.h    # third-parties header-only library
 ├── build.py    # Builder for driver in src/
 ├── cli.py      # Command Line Interface Entry
-└── __init__.py # Common Definitions like probe, Map
+├── common.py   # Common Internal API not for User import
+└── __init__.py # Common Defn for user import like probe, Map
 ```
 
 The overall structure is clean and approachable, we welcome developers to hack the system for their need. Raise issues if you need help.
 
 ## More 
 
-* How are probes executed? Check the Probe Execution Model.
-* How to read the neutrino trace? Check the Trace File Structure.
-* How to extend the system? Check Extending Neutrino.
-* How good is Neutrino? Check System Performance.
+* How to write my probe? Check the [Probe Writing Guide](https://open-neutrino.github.io/docs/write-probes).
+* How are probes executed? Check the [Probe Execution Model](https://open-neutrino.github.io/docs/execute-model).
+* How to read the neutrino trace? Check the [Trace File Structure](https://open-neutrino.github.io/docs/read-trace).
+* How to Neutrino works and how to extend? [Check the Reference and Internals](https://open-neutrino.github.io/docs/system-workflow).
+* How good is Neutrino? Check the [Utilities and Extensions](https://open-neutrino.github.io/docs/analysis-code)
 
 ## Citation
 If you used Neutrino in your research, please cite the paper below. And we welcome you to send us a link to your paper. 
