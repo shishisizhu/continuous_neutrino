@@ -1,35 +1,22 @@
 """Parse and flatten Python Tracing DSL"""
-from neutrino.language import DTYPES # neutrino/language/__init__.py
+from neutrino.language import TYPES # neutrino/language/__init__.py
 import ast
 from typing import Optional
 from dataclasses import dataclass
+from neutrino.common import Register, Probe, Map
 
-@dataclass
-class Register:
-    name: str
-    dtype: str
-    init: int
-
-@dataclass
-class Probe:
-    name:   str                   # name is the key in TOML
-    level:  str                   # level of the probe
-    pos:    list[str]             # := tracepoint in the paper
-    size:   Optional[int] = 0     # number of bytes per thread
-    before: Optional[list] = None # snippet inserted before, one of before and after shall be given
-    after:  Optional[list] = None # snippet inserted after,  one of before and after shall be given
-    
 allowed_nodes = {
     ast.Import,     # Imported Stuff
     ast.Module,     # the greatest start
     ast.Name,       # Name of Variable
     ast.Assign,     # Assign Value
+    ast.AugAssign,  # +=
     ast.UnaryOp,    # Unary Op, only negative
     ast.BinOp,      # Binary Op, +-*/
     ast.Call,       # Call function
     ast.Attribute,  # Access Attribute of Namespace
     ast.Constant,   # Constant Value
-    ast.Expr        # Single Expression
+    ast.Expr,       # Single Expression
 }
 
 binary_ops = {
@@ -44,17 +31,18 @@ unary_ops = {
 }
 
 class NeutrinoVisitor(ast.NodeVisitor):
-    def __init__(self, nl_name: str, regs: list[str]):
+    def __init__(self, nl_name: str, regs: list[str], maps: list[str]):
         super().__init__()
         self.nl_name = nl_name
         self.reg_counter = -1 # make it R0
         self.ir: list[tuple] = []
         self.reg_map: dict[str, str] = {reg: self.fresh_name() for reg in regs}
+        self.maps = maps
         # initialize and visit tree
 
     def fresh_name(self):
         self.reg_counter += 1
-        return f"R{self.reg_counter}"
+        return f"NR{self.reg_counter}"
 
     def visit_Assign(self, node): # Lowered to mov 
         # we shall check if the target has a known name
@@ -97,6 +85,23 @@ class NeutrinoVisitor(ast.NodeVisitor):
             raise NotImplementedError()
         self.reg_map[new_name] = new_name
         return new_name
+    
+    def visit_AugAssign(self, node):
+        rhs = self.process_operand(node.value)
+        name = self.reg_map[node.target.id]
+        if isinstance(node.op, ast.Add):
+            self.ir.append(["add", name, name, rhs])
+        elif isinstance(node.op, ast.Sub):
+            self.ir.append(["sub", name, name, rhs])
+        elif isinstance(node.op, ast.Mult):
+            self.ir.append(["mul", name, name, rhs])
+        elif isinstance(node.op, ast.Div):
+            self.ir.append(["div", name, name, rhs])
+        elif isinstance(node.op, ast.LShift):
+            self.ir.append(["lsh", name, name, rhs])
+        else:
+            raise NotImplementedError()
+        return name
 
     def visit_UnaryOp(self, node): 
         value = self.process_operand(node.operand)
@@ -109,9 +114,9 @@ class NeutrinoVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node):
         func_name = self.visit(node.func)
-        if func_name == "smid":
+        if func_name == "cuid":
             new_name = self.fresh_name()
-            self.ir.append(["smid", new_name])
+            self.ir.append(["cuid", new_name])
             self.reg_map[new_name] = new_name
             return new_name
         elif func_name == "time":
@@ -125,29 +130,18 @@ class NeutrinoVisitor(ast.NodeVisitor):
             self.ir.append(["clock", new_name]) 
             return new_name
         elif func_name == "save":
-            save_inst = ""
+            map_name = node.func.value.id
+            if map_name not in self.maps:
+                raise ValueError(f"Map {map_name} not found, known maps: {self.maps}")            
             regs = []
-            for keyword in node.keywords:
-                if keyword.arg == "dtype":
-                    dtype = self.visit(keyword.value)
-                    if dtype == "u32": 
-                        save_inst = "stw"
-                    elif dtype == "u64":
-                        save_inst = "stdw"
-                elif keyword.arg == "regs":
-                    if isinstance(keyword.value, ast.Name):
-                        regs.append(self.reg_map[keyword.value.id])
-                    elif isinstance(keyword.value, (ast.Tuple, ast.List)):
-                        for reg in keyword.value.elts:
-                            regs.append(self.reg_map[reg.id])
-            if len(regs) == 0 and len(node.args) > 0:
-                if isinstance(node.args[0], (ast.Tuple, ast.List)):
-                    for reg in node.args[0].elts:
-                        regs.append(self.reg_map[self.visit(reg)])
+            for arg in node.args:
+                if isinstance(arg, ast.Name):
+                    regs.append(self.reg_map[arg.id])
+                elif isinstance(arg, ast.Attribute):
+                    regs.append(self.visit_Attribute(arg))
                 else:
-                    regs.append(self.reg_map[self.visit(node.args[0])])
-            for reg in regs:
-                self.ir.append([save_inst, reg])
+                    regs.append(self.reg_map[self.visit(arg)])
+            self.ir.append(["SAVE", map_name] + regs)
         else:
             raise NotImplementedError()
     
@@ -155,7 +149,9 @@ class NeutrinoVisitor(ast.NodeVisitor):
         return node.id
 
     def visit_Attribute(self, node):
-        if node.value.id == self.nl_name:
+        if node.value.id == self.nl_name or node.value.id in self.maps:
+            if node.attr in ("bytes", "addr", "out", "in1", "in2", "in3"):
+                return node.attr.upper()
             return node.attr
         else:
             raise ValueError(f"can only refer to neutrino.language semantic but got {node.value.id}")
@@ -169,64 +165,87 @@ class NeutrinoVisitor(ast.NodeVisitor):
         super().generic_visit(node)
 
 
-def parse(code: str) -> tuple[list[Register], list[Probe]]:
+def parse(code: str) -> tuple[list[Register], list[Probe], list[Map], str]:
     """Parse the code into probes"""
     tree = ast.parse(code)
-    nl_name: str = None # name of neutrino.language in the code
-    regs:    list[Register] = []
-    probes:  list[Probe] = []
+    nl_name:  str = None # name of neutrino.language in the code
+    regs:     list[Register] = []
+    num_regs: int = 0
+    probes:   list[Probe] = []
+    callback: str = "" # not used yet, but we can use it later
+    maps:     list[Map] = [] # not used yet, but we can use it later
 
     for node in tree.body:
         if type(node) is ast.Import and node.names[0].name == "neutrino.language":
             nl_name = node.names[0].asname
+        elif type(node) is ast.Assign and node.targets[0].id == "CALLBACK":
+            if isinstance(node.value, ast.Constant):
+                callback = node.value.value
+            else:
+                raise ValueError("CALLBACK must be a string constant")
         elif type(node) is ast.AnnAssign and node.annotation:
-            if node.annotation.value.id == nl_name and node.annotation.attr in DTYPES:
+            if node.annotation.value.id == nl_name and node.annotation.attr in TYPES:
                 regs.append(Register(node.target.id, node.annotation.attr, node.value.value)) 
+        elif type(node) is ast.ClassDef and node.decorator_list:
+            name = node.name # take class name as map name
+            decorator = node.decorator_list[0]
+            if decorator.func.id == "Map":
+                level, type_, size, cap, contents = None, None, 0, 1, []
+                for keyword in decorator.keywords:
+                    if   keyword.arg == "level": level = keyword.value.value
+                    elif keyword.arg == "type":  type_ = keyword.value.value
+                    elif keyword.arg == "size":  size = keyword.value.value
+                    elif keyword.arg == "cap":   cap = keyword.value.value
+                if size % 8 != 0: 
+                    raise ValueError("size must be multiple of 8 to avoid misaligned address")
+                if not level or not type_: 
+                    raise ValueError("level and type must be specified")
+                if not isinstance(cap, int) and cap != "dynamic": 
+                    raise ValueError("cap must be an integer or 'dynamic'")
+                # check if map existed or not
+                for node in node.body:
+                    if type(node) is ast.AnnAssign and node.annotation:
+                        if node.annotation.value.id == nl_name and node.annotation.attr in TYPES:
+                            contents.append(Register(node.target.id, node.annotation.attr, None))
+                    else:
+                        raise ValueError(f"Map {name} must only contain AnnAssign nodes")
+                ordered = sorted(contents, key=lambda reg: reg.dtype, reverse=True)
+                if ordered != contents:
+                    print("[warn] map contents reordered")
+                # create a map object 
+                maps.append(Map(name=name, level=level, type=type_, size=size, cap=cap, regs=ordered))
         elif type(node) is ast.FunctionDef and node.decorator_list:
             name = node.name # take func name as probe name
             decorator = node.decorator_list[0]
-            if decorator.func.value.id == nl_name and decorator.func.attr == "probe":
-                pos, level, ret, size = None, None, False, 0
+            if decorator.func.id == "probe":
+                pos, level, before = None, None, False
                 for keyword in decorator.keywords:
                     if   keyword.arg == "pos":       pos = keyword.value.value
                     elif keyword.arg == "level":     level = keyword.value.value
-                    elif keyword.arg == "ret":       ret = keyword.value.value
-                    elif keyword.arg == "size":      size = keyword.value.value
+                    elif keyword.arg == "before":    before = keyword.value.value
                 if not pos or not level: raise ValueError("position must be specified")
                 # check if probe existed or not
-                visitor = NeutrinoVisitor(nl_name=nl_name, regs=[reg.name for reg in regs])
+                visitor = NeutrinoVisitor(nl_name=nl_name, regs=[reg.name for reg in regs], maps=[map.name for map in maps])
                 visitor.visit(ast.Module(body=node.body)) # Take it as independent code
-                probe = Probe(name=name, pos=pos, level=level, size=size)
-                if ret:
+                probe = Probe(name=name, pos=pos, level=level)
+                if before:
                     probe.before = visitor.ir
                 else:
                     probe.after  = visitor.ir
                 probes.append(probe)
+                num_regs = max(num_regs, visitor.reg_counter)
     
-    return regs, probes
+    return num_regs + len(regs), probes, maps, callback
 
 # A Simple Test Case, not really used in production
 if __name__ == "__main__":
-    code = """
-import neutrino
-import neutrino.language as nl # API borrowed from Triton :)
+    import sys
 
-gstart : nl.u64 = 0
-gend   : nl.u64 = 0
-elapsed: nl.u64 = 0
+    code = open(sys.argv[1], "r").read()
 
-@nl.probe(pos="kernel", level="warp") # broadcast to warp leader
-def block_sched_start():
-    gstart = nl.clock()
-
-@nl.probe(pos="kernel", ret=True, level="warp", size=16) # save 16 bytes per warp
-def block_sched_end():
-    gend = nl.clock()
-    elapsed = gend - gstart 
-    nl.save(gstart, dtype=nl.u64)
-    nl.save((elapsed, nl.smid()), dtype=nl.u32) # auto casted"""
-    
-    regs, probes = parse(code)
+    regs, probes, maps, callback = parse(code)
     
     print(regs)
     print(probes)
+    print(maps)
+    print(callback)

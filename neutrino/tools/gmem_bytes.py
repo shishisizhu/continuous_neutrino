@@ -1,40 +1,29 @@
-# Neutrino Auto-Generated Code for Trace Reading
-import struct
-from typing import NamedTuple, List, Tuple
-from neutrino import TraceHeader, TraceSection
+from neutrino import probe, Map
+import neutrino.language as nl
 
-class saving(NamedTuple):
-	sync_bytes: int
-	async_bytes: int
+CALLBACK = "gmem_bytes_analysis.py"
 
+@Map(level="thread", type="array", size=8, cap=1)
+class GMEMBytes:
+    sync_bytes: nl.u32
+    async_bytes: nl.u32
 
-def parse(path: str) -> Tuple[TraceHeader, List[TraceSection], List[List[saving]]]:
-    with open(path, "rb") as f:
-        gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, numProbes = struct.unpack("iiiiiiii", f.read(32))
-        header: TraceHeader = TraceHeader(gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, numProbes)
-        assert header.numProbes == 1 # currently only one saving probe is supported
-        sections: List[TraceSection] = []
-        for _ in range(header.numProbes):
-            size, offset = struct.unpack("QQ", f.read(16))
-            sections.append(TraceSection(size, offset))
-        gridSize = header.gridDimX * header.gridDimY * header.gridDimZ
-        blockSize = header.blockDimX * header.blockDimY * header.blockDimZ
-        records: List[List[saving]] = []
-        for i in range(gridSize):
-            records.append([])
-            for j in range(blockSize):
-                sync_bytes, async_bytes = struct.unpack("II", f.read(8))
-                records[i].append(saving(sync_bytes, async_bytes))
-        return header, sections, records
-# END OF GENERATED CODE
-import sys
-header, sections, records = parse(sys.argv[1]) # filled by path to trace
+sync_bytes:  nl.u64 = 0
+async_bytes: nl.u64 = 0
 
-gridSize = header.gridDimX * header.gridDimY * header.gridDimZ
-blockSize = header.blockDimX * header.blockDimY * header.blockDimZ
-gmem_bytes = 0
-for i in range(gridSize):
-    for j in range(blockSize):
-         gmem_bytes += records[i][j].sync_bytes + records[i][j].async_bytes
+@probe(level="thread", pos="kernel", before=True)
+def init():
+    sync_bytes = 0
+    async_bytes = 0
 
-print(f"gmem_bytes:{gmem_bytes}")
+@probe(level="thread", pos="ld.global:st.global")
+def record_sync():
+    sync_bytes += nl.bytes
+
+@probe(level="thread", pos="cp.async.ca:cp.async.cg")
+def record_async():
+    async_bytes += nl.bytes
+
+@probe(level="thread", pos="kernel")
+def save():
+    GMEMBytes.save(sync_bytes, async_bytes)

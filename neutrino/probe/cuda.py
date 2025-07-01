@@ -1,25 +1,19 @@
 """Neutrino Probing Engine, CUDA Implementation"""
 
-from typing import List, Tuple, Dict, Set
 import os
 import sys
 import shutil
 import subprocess
 import traceback # usef for print backtrace to log file instead of stdout
 import toml      # to load probes from envariables
-from dataclasses import dataclass
-from engine import Probe, Ref, safe_load_probes, TRACE_READING_CODE_PY
+from neutrino.common import Register, Probe, Map, load
+from neutrino.probe import Ref, KernelParam
 
 workdir = sys.argv[1]     # directory contains original.bin
 log = open(os.path.join(workdir, "process.log"), 'w')
 
 # a macro like terms
 SUPPORTED_DATAMODEL = { "thread": 0, "warp": 1 }
-
-@dataclass
-class KernelParam:
-    dtype: str
-    name: str
 
 # TODO move it to global variable or configurable
 def get_arch() -> str:
@@ -92,7 +86,7 @@ def dump(workdir: str, name: str = "original", suffix: str = ".bin") -> str:
         # if still not found
         raise ValueError("PTX Not Found in CUBIN")
 
-def prune(ptx: str, entry_name: str) -> Tuple[str, str, str, str]:
+def prune(ptx: str, entry_name: str) -> tuple[str, str, str, str]:
     """ a minimum parser to truncate the ptx for specific entry
 
     Use this function to locate a specific entry with entry_name.
@@ -252,33 +246,33 @@ setp.eq.u32 %leader, %warpbuf2, 0;          // check if thread is warp leader
 // end buffer calculation"""
 
 # NOTE buffer location for thread-local buffers, every probe has independent this part
-THREAD_PROBE_BUFFER = """// begin {name} buffer
-.reg .b64 %buf_{name}<5>;                         // register group defn
-mul.wide.s32  %buf_{name}4, %buf1, {no_bytes};    // get buffer location, no_bytes is per thread
-ld.param.u64  %buf_{name}3, [param_{name}];       // load address from .param state space
-cvta.to.global.u64 	%buf_{name}2, %buf_{name}3;   // convert address to .global state space
-add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4; // offset to get final thread-specific address
-// end {name} buffer"""
+THREAD_PROBE_BUFFER = """// begin {name} map
+.reg .b64 %map_{name}<5>;                         // register group defn
+mul.wide.s32  %map_{name}4, %buf1, {no_bytes};    // get buffer location, no_bytes is per thread
+ld.param.u64  %map_{name}3, [param_{name}];       // load address from .param state space
+cvta.to.global.u64 	%map_{name}2, %map_{name}3;   // convert address to .global state space
+add.s64 %map_{name}1, %map_{name}2, %map_{name}4; // offset to get final thread-specific address
+// end {name} map"""
 
 # NOTE buffer of the dynamic stuffs
-THREAD_PROBE_DYNAMIC_BUFFER = """// begin {name} dynamic buffer
-.reg .b64 %buf_{name}<5>;                         // register group defn
+THREAD_PROBE_DYNAMIC_BUFFER = """// begin {name} dynamic map
+.reg .b64 %map_{name}<5>;                         // register group defn
 .reg .b32 %cnt_{name};                            // The dynamic count of buffer size
 ld.param.u32  %cnt_{name}, [bytes_{name}];        // load sizes from .param state spaces
-mul.wide.s32  %buf_{name}4, %buf1, %cnt_{name};   // get buffer location, no_bytes is per thread
-ld.param.u64  %buf_{name}3, [param_{name}];       // load address from .param state space
-cvta.to.global.u64 	%buf_{name}2, %buf_{name}3;   // convert address to .global state space
-add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4; // offset to get final thread-specific address
-// end {name} dynamic buffer"""
+mul.wide.s32  %map_{name}4, %buf1, %cnt_{name};   // get buffer location, no_bytes is per thread
+ld.param.u64  %map_{name}3, [param_{name}];       // load address from .param state space
+cvta.to.global.u64 	%map_{name}2, %map_{name}3;   // convert address to .global state space
+add.s64 %map_{name}1, %map_{name}2, %map_{name}4; // offset to get final thread-specific address
+// end {name} dynamic map"""
 
 # NOTE buffer location for warp-local buffers, every probe has independent this part
-WARP_PROBE_BUFFER = """// begin {name} buffer
-.reg .b64 %buf_{name}<5>;                          // register group defn
-@%leader mul.wide.s32  %buf_{name}4, %warpbuf1, {no_bytes}; // get buffer location, no_bytes is per thread
-@%leader ld.param.u64  %buf_{name}3, [param_{name}];        // load address from .param state space
-@%leader cvta.to.global.u64 	%buf_{name}2, %buf_{name}3;    // convert address to .global state space
-@%leader add.s64 %buf_{name}1, %buf_{name}2, %buf_{name}4;  // offset to get final thread-specific address
-// end {name} buffer"""
+WARP_PROBE_BUFFER = """// begin {name} map
+.reg .b64 %map_{name}<5>;                                   // register group defn
+@%leader mul.wide.s32  %map_{name}4, %warpbuf1, {no_bytes}; // get buffer location, no_bytes is per thread
+@%leader ld.param.u64  %map_{name}3, [param_{name}];        // load address from .param state space
+@%leader cvta.to.global.u64 	%map_{name}2, %map_{name}3; // convert address to .global state space
+@%leader add.s64 %map_{name}1, %map_{name}2, %map_{name}4;  // offset to get final thread-specific address
+// end {name} map"""
 
 # NOTE for every probe with datamodel not none
 # only support .u64 and recommend use 16 bytes alignment, minimum is 8 bytes
@@ -286,38 +280,39 @@ PROBE_PARAM = ".param .u64 param_{name}"
 COUNT_PARAM = ".param .u32 bytes_{name}"
 
 # NOTE This is a special probe applied if dynamic = True, to be filled with count_inst and count_size
-COUNT_PROBE = """[saving]
-position = "kernel"
-datamodel = "thread:8"
-before = \""".reg .u64 %counter; // counter 
-mov.u64 %counter, 0; // don't forget init it to 0 like C :)\"""
-after = \"""SAVE.u64 %counter;\"""
+COUNT_PROBE = """regs = 1
+[map.Count]
+level = "thread"
+type = "array"
+size = 8
+cap = 1
 
-[counter]
-position = "{count_inst}"
-before = \"""add.u64 %counter, %counter, {count_size};\"""
+[map.Count.regs]
+count = [ "u64", "None", ]
+
+[probe.Save]
+pos = "kernel"
+level = "thread"
+before = "mov.u64 %NR0, 0;"
+after = "SAVE [ Count ] {{ %NR0 }};"
+
+[probe.Count]
+pos = "{count_inst}"
+level = "thread"
+before = "add.u64 %NR0, %NR0, {count_size};"
 """
 
-def probing(asm: str, probes: List[Probe]) -> Tuple[str, List[int], str]:
-    """Process the probes, the core function of probing engine
-
-    In general, Take several steps, from:
-    0. Process the probe 
-    1. Validate the probe
-    2. Check the location for parsing
-    3. Parsing the PTX Assembly
-    4. Adding the PTX Assembly
-    """
+def probing(asm: str, probes: list[Probe], maps: list[Map], regs: int) -> tuple[str, list[int]]:
+    """Process the probes, the core function of probing engine"""
 
     # NOTE parse interesting locations
     # A mapping from location to probes, a probe can hook at multiple location
-    positions: Dict[str, List[Probe]] = dict()
-    kernel_start_probes: List[Probe]  = []
-    kernel_end_probes:   List[Probe]  = [] # TODO remove if really don't need
+    positions: dict[str, list[Probe]] = dict()
+    kernel_start_probes: list[Probe]  = []
     # NOTE turn kernel:end into ret:start for better matching
     for probe in probes:
         # different position split by ;, and inside split by : for start/end
-        for position in probe.position:
+        for position in probe.pos:
             if position == "kernel": # turn into listening instructions
                 if probe.after is not None:
                     if "ret;" in positions:
@@ -383,69 +378,76 @@ def probing(asm: str, probes: List[Probe]) -> Tuple[str, List[int], str]:
     ptx_lines[param_end_line] = ptx_lines[param_end_line] + "," # add , to indicate more param
     # NOTE parameter layouts: Parameters are pointers to buffer, or buffer size
     # We arange buffer pointers linearly in advance (u64), and later size (u32)
-    params_added: List[str] = []
-    count_params: List[str] = [] # NOTE used for dynamic counts only
+    params_added: list[str] = []
+    count_params: list[str] = [] # NOTE used for dynamic counts only
 
-    # NOTE save the probe_mem_sizes so Hook Driver has a way to load the stuff back
+    # NOTE save the map_sizes so Hook Driver has a way to allocate the map memory
     # we must make sure this is aligned with the order of parameter or will be illegal access
-    probe_mem_sizes: List[Tuple[str, int]] = [] # 
+    map_sizes: list[tuple[str, int]] = [] # 
     
-    processed: Set[str] = set() # a set to avoid repeated process same probe that leads to error
-    datamodels: Set[str] = set()
-    for probe in probes + kernel_start_probes:
-        if probe.name not in processed and probe.datamodel is not None:
-            if probe.cap != "count":
-                probe_mem_sizes.append((probe.datamodel, int(probe.cap) * int(probe.no_bytes)))
-                params_added.append(PROBE_PARAM.format(name=probe.name))
-                processed.add(probe.name)
-                datamodels.add(probe.datamodel)
-            else:
-                probe_mem_sizes.append((probe.datamodel, -1))
-                params_added.append(PROBE_PARAM.format(name=probe.name))
-                count_params.append(COUNT_PARAM.format(name=probe.name))
-                processed.add(probe.name)
-                datamodels.add(probe.datamodel)
+    levels: set[str] = set()
+    for map_ in maps:
+        if map_.cap != "dynamic":
+            map_sizes.append((map_.level, map_.cap * map_.size))
+            params_added.append(PROBE_PARAM.format(name=map_.name))
+            levels.add(map_.level)
+        else:
+            map_sizes.append((map_.level, -1))
+            params_added.append(PROBE_PARAM.format(name=map_.name))
+            count_params.append(COUNT_PARAM.format(name=map_.name))
+            levels.add(map_.level)
+
         # else just ignore
     params_added = params_added + count_params # formulate the layout
     ptx_lines.insert(param_end_line + 1, ",\n".join(params_added))
     offset += 1 # in total one line is added 
     # Now add the probe with kernel:start -> this shall not dump anything I think
+    ptx_lines.insert(body_start_line + offset + 1, f".reg .u64 %NR<{regs + 1}>;")
+    offset += 1
     for probe in kernel_start_probes:
         # NOTE kernel:start probe has no helpers and have no predicate
         ptx_lines.insert(body_start_line + offset + 1, probe.before) # None is checked before
         offset += 1
     # Now add the common buffer calculation
-    if "thread" in datamodels:
+    if "thread" in levels:
         ptx_lines.insert(body_start_line + offset + 1, COMMON_BUFFER_CALC)
         offset += 1
-    if "warp" in datamodels:
+    if "warp" in levels:
         ptx_lines.insert(body_start_line + offset + 1, WARP_BUFFER_CALC)
         offset += 1
     # Now add the individual buffer calculation
-    processed = set()
-    for probe in probes + kernel_start_probes:
-        if probe.name not in processed:
-            if probe.datamodel == "thread":
-                if probe.cap != "count":
-                    no_bytes = str(int(probe.cap) * int(probe.no_bytes))
-                    ptx_lines.insert(body_start_line + offset + 1, 
-                                    THREAD_PROBE_BUFFER.format(name=probe.name, no_bytes=no_bytes))
-                    offset += 1
-                else:
-                    ptx_lines.insert(body_start_line + offset + 1, 
-                                    THREAD_PROBE_DYNAMIC_BUFFER.format(name=probe.name))
-                    offset += 1
-            elif probe.datamodel == "warp":
-                no_bytes = int(probe.cap) * int(probe.no_bytes)
-                ptx_lines.insert(body_start_line + offset + 1,
-                                 WARP_PROBE_BUFFER.format(name=probe.name, no_bytes=no_bytes))
+    # NOTE add the handle of u32 registers
+    for map_ in maps:
+        num_u32 = 0
+        for reg in map_.regs:
+            if reg.dtype == "u32":
+                num_u32 += 1
+        if map_.level == "thread":
+            if map_.cap != "dynamic":
+                buffer_asm = THREAD_PROBE_BUFFER.format(name=map_.name, no_bytes=str(map_.cap * map_.size))
+                if num_u32 > 0:
+                    buffer_asm = buffer_asm + f"\n.reg .u32 %{map_.name}_u32_<{num_u32 + 1}>;"
+                ptx_lines.insert(body_start_line + offset + 1, buffer_asm)
                 offset += 1
-            processed.add(probe.name)
-        # all rest is treated as no saving
-    
-    # NOTE for reading the trace into Python
-    trace_reading_code = ""
+            else:
+                buffer_asm = THREAD_PROBE_DYNAMIC_BUFFER.format(name=map_.name)
+                if num_u32 > 0:
+                    buffer_asm = buffer_asm + f"\n.reg .u32 %{map_.name}_u32_<{num_u32 + 1}>;"
+                ptx_lines.insert(body_start_line + offset + 1, buffer_asm)
+                offset += 1
+        elif map_.level == "warp":
+            if map_.cap != "dynamic":
+                buffer_asm = WARP_PROBE_BUFFER.format(name=map_.name, no_bytes=str(map_.cap * map_.size))
+                if num_u32 > 0:
+                    buffer_asm = buffer_asm + f"\n.reg .u32 %{map_.name}_u32_<{num_u32 + 1}>;"
+                ptx_lines.insert(body_start_line + offset + 1, buffer_asm)
+                offset += 1
+            else:
+                raise NotImplementedError()
+        else:
+            raise NotImplementedError()
 
+    name_to_map: dict[str, Map] = {m.name: m for m in maps}
     # Now add the instruction listenings 
     for idx in range(len(ptx_lines)):
         # ignore most of line that is a string!
@@ -455,7 +457,7 @@ def probing(asm: str, probes: List[Probe]) -> Tuple[str, List[int], str]:
             before_after: str = ptx_lines[idx].before_after
             # parse instruction operands, operands are separated by space fundamentally
             tmp = line[:line.index(";")].split(",")
-            operands: List[str] = []
+            operands: list[str] = []
             # NOTE handling vectorized operands with { and }
             merges = []
             merging: bool = False
@@ -529,79 +531,57 @@ def probing(asm: str, probes: List[Probe]) -> Tuple[str, List[int], str]:
             snippet_lines = snippet.split("\n")
             # NOTE special arrangements for warp datamodel
             org_pred = pred
-            if probe.datamodel == "warp":
+            if probe.level == "warp":
                 if pred == "":
                     pred = "@%leader " # apply filter that only leader works
                 else:
                     pred = "@%joint_pred " # will be updated %leader AND pred
-            
-            # NOTE for reading the probe afterwards
-            saved: List[Tuple[str, str]] = []
 
             for snippet_line_idx in range(len(snippet_lines)):
                 snippet_line: str = snippet_lines[snippet_line_idx]
                 if "SAVE" in snippet_line: # only one save, at the begin of line
-                    # NOTE saving different types must be separated
-                    # example SAVE.u64 {%gstart, %gend}; or SAVE.u32 {%smid, %nsmid}; 
-                    dtype = snippet_line[snippet_line.find("SAVE") + 5: snippet_line.find("SAVE") + 8]
-                    save_lines = [] # start a new string
-                    if "{" in snippet_line:
-                        items = snippet_line[snippet_line.index("{") + 1:snippet_line.index("}")].split(",")
-                    else:
-                        items = [snippet_line[snippet_line.find("SAVE") + 8: snippet_line.find(";")].strip(), ]
-                    # print(items)
-                    if dtype == "u64":
-                        for item_idx in range(len(items) // 2): # try to generate vectorized!
-                            save_lines.append(f"{pred}st.global.v2.u64 [%buf_{probe.name}1],  {{ {items[item_idx * 2]}, {items[item_idx * 2 + 1]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 16;")
-                            # TODO Need to convert register starts with % to Python variable name, now only forget 1st one
-                            saved.append((items[item_idx * 2], "Q")) # Q := u64 in Python struct
-                            saved.append((items[item_idx * 2 + 1], "Q")) # Q := u64 in Python struct
-                        if len(items) % 2 != 0: # odd number -> one item left!
-                            save_lines.append(f"{pred}st.global.u64 [%buf_{probe.name}1], {items[-1]};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 8;")
-                            saved.append((items[-1], "Q")) # Q := u64 in Python struct
-                    elif dtype == "u32":
-                        for item_idx in range(len(items) // 4): # try to generate vectorized!
-                            save_lines.append(f"{pred}st.global.v4.u32 [%buf_{probe.name}1],  {{ {items[item_idx * 4]}, {items[item_idx * 4 + 1]}, {items[item_idx * 4 + 2]}, {items[item_idx * 4 + 3]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 16;")
-                            saved.append((items[item_idx * 4], "I")) # I := u32 in Python struct
-                            saved.append((items[item_idx * 4 + 1], "I")) # I := u32 in Python struct
-                            saved.append((items[item_idx * 4 + 2], "I")) # I := u32 in Python struct
-                            saved.append((items[item_idx * 4 + 3], "I")) # I := u32 in Python struct
-                        if len(items) % 4 != 0: # two items left...
-                            save_lines.append(f"{pred}st.global.v2.u32 [%buf_{probe.name}1],  {{ {items[-2]}, {items[-1]} }};\n{pred}add.s64 %buf_{probe.name}1, %buf_{probe.name}1, 8;")
-                            saved.append((items[-2], "I")) # I := u32 in Python struct
-                            saved.append((items[-1], "I")) # I := u32 in Python struct
-                    else:
-                        raise ValueError(f"Unsupported dtype {dtype} in {probe.name}:{'before' if before_after else 'after'}")
-                    snippet_lines[snippet_line_idx] = "\n".join(save_lines)
+                    # SAVE [ block_sched ] { R0, R1, R3 }
+                    map_ = name_to_map[snippet_line[snippet_line.index("[") + 1: snippet_line.index("]")].strip()]
+                    # dtype = snippet_line[snippet_line.find("SAVE") + 5: snippet_line.find("SAVE") + 8]
+                    items = snippet_line[snippet_line.index("{") + 1:snippet_line.index("}")].split(",")
+                    assert len(items) == len(map_.regs), f"{map_.name}.save not follow definition"
+                    cvt_lines, u64s, u32s = [], [], []
+                    u32_idx = 1 # NOTE must be 1 due to some syntax issue I think
+                    for item, reg in zip(items, map_.regs):
+                        if reg.dtype == "u64": 
+                            u64s.append(item)
+                        elif reg.dtype == "u32": # apply conversion
+                            cvt_lines.append(f"{pred}cvt.u32.u64 %{map_.name}_u32_{u32_idx}, {item};\n")
+                            u32s.append(f"%{map_.name}_u32_{u32_idx}")
+                            u32_idx += 1
+                        else:
+                            raise NotImplementedError
+                    assert len(u32s) % 2 == 0, "Must save 2n u32 registers for memory alignment, please promote to u64"
+                    save_lines = []
+                    for item_idx in range(len(u64s) // 2):
+                        save_lines.append(f"{pred}st.global.v2.u64 [%map_{map_.name}1],  {{ {u64s[item_idx * 2]}, {u64s[item_idx * 2 + 1]} }};\n{pred}add.s64 %map_{map_.name}1, %map_{map_.name}1, 16;")
+                    if len(u64s) % 2 != 0: # odd number -> one item left!
+                        save_lines.append(f"{pred}st.global.u64 [%map_{map_.name}1], {u64s[-1]};\n{pred}add.s64 %map_{map_.name}1, %map_{map_.name}1, 8;")
+                    for item_idx in range(len(u32s) // 4):
+                        save_lines.append(f"{pred}st.global.v4.u32 [%map_{map_.name}1],  {{ {u32s[item_idx * 4]}, {u32s[item_idx * 4 + 1]}, {u32s[item_idx * 4 + 2]}, {u32s[item_idx * 4 + 3]} }};\n{pred}add.s64 %map_{map_.name}1, %map_{map_.name}1, 16;")
+                    if len(u32s) % 4 != 0: # two items left...
+                        save_lines.append(f"{pred}st.global.v2.u32 [%map_{map_.name}1],  {{ {u32s[-2]}, {u32s[-1]} }};\n{pred}add.s64 %map_{map_.name}1, %map_{map_.name}1, 8;")
+                    snippet_lines[snippet_line_idx] = "\n".join(cvt_lines) + "\n".join(save_lines)
                 else:
                     # or just add the pred!
                     # NOTE handling warp that having double buffer
-                    snippet_lines[snippet_line_idx] = pred + snippet_line
-            if probe.datamodel == "warp" and org_pred != "":
+                    if ".reg" not in snippet_line and snippet_line.strip() not in ("{", "}"):
+                        snippet_lines[snippet_line_idx] = pred + snippet_line
+                    else:
+                        snippet_lines[snippet_line_idx] = snippet_line
+            if probe.level == "warp" and org_pred != "":
                 snippet_lines.insert(0, f"and.pred %tmp, %leader, {org_pred[1:]}; // joint prediction") # ignore the '@' signal at first
             snippet = "\n".join(snippet_lines)
             # finally replace the Ref with snippet to finish the probing!
             ptx_lines[idx] = snippet
-            # Finalizing Code Generation for Reading Probe Content
-            if probe.datamodel is not None:
-                saved_content = ""
-                saved_reading = ""
-                format_string = ""
-                reading_bytes = 0
-                for name, dtype in saved:
-                    name = name.strip()
-                    name = name[1:] if name.startswith("%") else name
-                    saved_content += f"\t{name}: int\n"
-                    saved_reading += f"{name}, "
-                    format_string += dtype
-                    reading_bytes += 8 if dtype == "Q" else 4
-                trace_reading_code += TRACE_READING_CODE_PY.format(probe_name = probe.name, 
-                    saved_content=saved_content, saved_reading=saved_reading[:-2], 
-                    format_string=format_string, reading_bytes=reading_bytes,
-                    warp_div="//32" if probe.datamodel.startswith("warp") else "")
 
     # Finally finished.1
-    return "\n".join(ptx_lines), probe_mem_sizes, trace_reading_code
+    return "\n".join(ptx_lines)
 
 def assemble(workdir: str, name: str) -> None:
     """compile the ptx into cubin via ptxas
@@ -625,7 +605,7 @@ def assemble(workdir: str, name: str) -> None:
     if len(result.stdout) > 0:
         print(result.stdout.decode("utf-8"), file=log)
 
-def parse_params(ptx: str) -> Tuple[List[KernelParam], str]:
+def parse_params(ptx: str) -> tuple[list[KernelParam], str]:
     """parse kernel function parameters
     @see https://docs.nvidia.com/cuda/parallel-thread-execution/#kernel-function-parameters
 
@@ -636,8 +616,8 @@ def parse_params(ptx: str) -> Tuple[List[KernelParam], str]:
     name_start = ptx.rfind(" ", 0, start)
     end = ptx.find(")", start)
     ptx_lines = ptx[start + 1 : end].split("\n")
-    param_lines: List[str] = []
-    params: List[KernelParam] = []
+    param_lines: list[str] = []
+    params: list[KernelParam] = []
 
     for line in ptx_lines:
         if  ".param" in line:
@@ -650,8 +630,8 @@ def parse_params(ptx: str) -> Tuple[List[KernelParam], str]:
     return params, ptx[name_start + 1:start] # + 1 := ignore space
 
 
-def write_kernel_info(name: str, params: List[KernelParam], probe_mem_sizes: List[int], 
-                      workdir: str, analyze_hook: str = "", file_name: str = "kernel.info"):
+def write_kernel_info(name: str, params: list[KernelParam], map_sizes: list[int], 
+                      workdir: str, file_name: str = "kernel.info"):
     """write kernel info to workdir/file_name"""
     # TODO add support for vectorized items
     with open(os.path.join(workdir, file_name), "w") as f:
@@ -660,14 +640,14 @@ def write_kernel_info(name: str, params: List[KernelParam], probe_mem_sizes: Lis
         # number of parameters, for parsing void** kernelParams
         print(len(params), file=f)
         # number of probes with memory
-        print(len(probe_mem_sizes), file=f)
+        print(len(map_sizes), file=f)
         # size of each memory section
-        for probe_type, size in probe_mem_sizes:
+        for probe_type, size in map_sizes:
             print(f"{SUPPORTED_DATAMODEL[probe_type]},{size}", file=f)
-        # NOTE: print the hook here, resolve relative path
-        if analyze_hook != "" and not analyze_hook.startswith("/"): 
-            analyze_hook = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", analyze_hook)
-        print(analyze_hook, file=f)
+        # # NOTE: print the hook here, resolve relative path
+        # if callback != "" and not callback.startswith("/"): 
+        #     callback = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", callback)
+        # print(callback, file=f)
         # # NOTE: following are referencing stuff not really used by hook driver
         # for param in params:
         #     print(f"{param.name},{param.dtype}", file=f)
@@ -678,23 +658,25 @@ if __name__ == "__main__":
     workdir = sys.argv[1]     # directory contains original.bin
     kernel_name = sys.argv[2].encode('utf-8', 'ignore').decode('utf-8', 'ignore') # for possible case with multiple entry in one binary
 
+    probes: dict
     if len(sys.argv) > 3: # NOTE to facilitate debugging, not used in production
         probe_path = sys.argv[3]
-        probe_toml = toml.load(probe_path)
+        probes = toml.load(probe_path)
+        print(probes)
     else: # the path in production
         # parse the environment variable to read the probes
         probe_envvar = os.environ.get("NEUTRINO_PROBES")
         if probe_envvar is None:
             raise ValueError("Can not read probes from envaraible 'NEUTRINO_PROBES'")
         # load it via toml
-        probe_toml = toml.loads(probe_envvar)
+        probes = toml.loads(probe_envvar)
     
-    # filter out, probes are nested dict in TOML via [name]
-    probes: Dict[str, dict] = dict()
-    analyze_hook = probe_toml["analyze_hook"] if "analyze_hook" in probe_toml else ""
-    for key, value in probe_toml.items():
-        if isinstance(value, dict):
-            probes[key] = value
+    # # filter out, probes are nested dict in TOML via [name]
+    # probes: Dict[str, dict] = dict()
+    # callback = probe_toml["CALLBACK"] if "callback" in probe_toml else ""
+    # for key, value in probe_toml.items():
+    #     if isinstance(value, dict):
+    #         probes[key] = value
 
     # parse the environment variable for filtered out kernel, this is for
     # 1. Some buggy kernels caused system fails -> many GPU error is not recoverable
@@ -741,25 +723,47 @@ if __name__ == "__main__":
             f.write(pruned_ptx)
 
         # convert probes from Python Dict to data structure
-        probes: list[Probe] = safe_load_probes(raw_probes=probes)
+        probes, maps, regs = load(probes)
 
+        # NOTE generate the trace reading code
         if dynamic:
             # First check the probe with size is dynamic, aka size = -1
-            count_inst = ""
+            count_inst = []
             count_size = 0
+            count_map  = ""
+            for map_ in maps:
+                if map_.cap == "dynamic":
+                    count_size = map_.size
+                    count_map  = map_.name
+                    break
             for probe in probes:
-                if probe.cap == "count":
-                    count_inst = ":".join(probe.position) # NOTE can not do for kernel
-                    count_size = probe.no_bytes
+                # NOTE there might be a bug that before and after can only save once
+                if probe.before is not None:
+                    if "SAVE" in probe.before and count_map in probe.before:
+                        count_inst = count_inst + probe.pos
+                if probe.after is not None:
+                    if "SAVE" in probe.after and count_map in probe.after:
+                        count_inst = count_inst + probe.pos
+            assert len(count_inst) > 0
+            count_inst = ":".join(count_inst)
             count_probe = COUNT_PROBE.format(count_inst = count_inst, count_size = count_size)
-            count_probe = safe_load_probes(toml.loads(count_probe))
-            count_ptx, count_mem_sizes, _ = probing(entry_section, count_probe)
+            count_probe, count_map, count_reg = load(toml.loads(count_probe))
+            count_ptx = probing(entry_section, count_probe, count_map, count_reg)
             count_ptx = global_section + "\n" + func_section + "\n" + count_ptx
             with open(os.path.join(workdir, "countd.ptx"), "w") as f:
                 f.write(count_ptx)
 
+        map_sizes: list[tuple[str, int]] = []
+        for map_ in maps:
+            if isinstance(map_.cap, int):
+                map_sizes.append((map_.level, map_.size * map_.cap))
+            elif map_.cap == "dynamic":
+                map_sizes.append((map_.level, -1))
+            else:
+                raise NotImplementedError
+
         # process ptx lines
-        probed_ptx, probe_mem_sizes, trace_reading_code = probing(entry_section, probes)
+        probed_ptx = probing(entry_section, probes, maps, regs)
 
         # merge global and func back
         probed_ptx  = global_section + "\n" + func_section + "\n" + probed_ptx
@@ -769,17 +773,13 @@ if __name__ == "__main__":
             f.write(probed_ptx)
         
         # params = parse_params(ptx_lines)
-        write_kernel_info(kernel_name, params, probe_mem_sizes, workdir, analyze_hook)
+        write_kernel_info(kernel_name, params, map_sizes, workdir)
 
         # compile ptx to binary, we want both probed and pruned
         assemble(workdir, "probed")
         assemble(workdir, "pruned")
         if dynamic:
-            with open(os.path.join(workdir, "countd.ptx"), "w") as f:
-                f.write(count_ptx)
             assemble(workdir, "countd")
-
-        print(trace_reading_code, file=log)
 
     except Exception as e:
         traceback.print_exc(file=log)

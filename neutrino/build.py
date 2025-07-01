@@ -75,7 +75,8 @@ NEUTRINO_REAL_DRIVER_LIB_DIR = ""
 real_libs = []
 for loc in locs:
     real_lib = os.readlink(loc)
-    if "lib32" not in loc and "lib32" not in real_lib: # NOTE fix lib32 bug
+     # NOTE fix lib32 and i386 bug
+    if "lib32" not in loc and "lib32" not in real_lib and "i386" not in loc and "i386" not in real_lib:
         if not real_lib.startswith("/"):
             NEUTRINO_REAL_DRIVER_LIB_DIR = os.path.dirname(loc)
             NEUTRINO_REAL_DRIVER_LIB_NAME = real_lib

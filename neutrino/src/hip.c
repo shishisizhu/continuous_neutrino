@@ -65,7 +65,7 @@ static void init(void) {
         fprintf(event_log, "[benchmark] ENABLED L2 Flush Size %d\n", NEUTRINO_BENCHMARK_FLUSH_MEM_SIZE);
         real_hipMalloc(&benchmark_flush_mem, NEUTRINO_BENCHMARK_FLUSH_MEM_SIZE);
     }
-    fprintf(event_log, "[info] init success\n"); 
+    fprintf(event_log, "[init] success\n"); 
 }
 
 /**

@@ -1,4 +1,4 @@
-from typing import NamedTuple
+from typing import NamedTuple, Union, Literal
 
 class TraceHeader(NamedTuple):
     gridDimX: int
@@ -11,8 +11,9 @@ class TraceHeader(NamedTuple):
     numProbes: int
 
 class TraceSection(NamedTuple):
-    size:   int
-    offset: int
+    size:    int
+    warpDiv: int
+    offset:  int
 
 def probe(pos: str, after: bool = False, level: str = "thread", size: int = 0):
     """Neutrino Probe Entry"""
@@ -24,3 +25,15 @@ def probe(pos: str, after: bool = False, level: str = "thread", size: int = 0):
           raise RuntimeError(f"{func.__name__} shall be jit other than run")
         return wrapper
     return inner
+
+def Map(level: Literal["warp", "thread"], type: str, size: int, cap: Union[int, Literal["dynamic"]]):
+    """Neutrino Map Definition"""
+    from functools import wraps
+    def inner(cls): 
+        @wraps(cls)
+        def wrapper(*args, **kwargs):
+          raise RuntimeError(f"{cls.__name__} shall be jit other than run")
+        return wrapper
+    return inner
+
+# Following are internal definition

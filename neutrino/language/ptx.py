@@ -1,62 +1,50 @@
 """Generate the CUDA PTX Assembly, a C-style asm"""
 
-from typing import Optional
-from dataclasses import dataclass
+from neutrino.common import Register, Probe, Map
 
-@dataclass
-class Register:
-    name: str
-    dtype: str
-    init: int
-
-@dataclass
-class Probe:
-    name:   str                   # name is the key in TOML
-    level:  str                   # level of the probe
-    pos:    list[str]             # := tracepoint in the paper
-    size:   Optional[int] = 0     # number of bytes per thread
-    before: Optional[list] = None # snippet inserted before, one of before and after shall be given
-    after:  Optional[list] = None # snippet inserted after,  one of before and after shall be given
+def filter_keyword(reg: str) -> str:
+    if reg in {"ADDR", "BYTES", "OUT", "IN1", "IN2", "IN3", "IN4"}:
+        return reg
+    elif isinstance(reg, int):
+        return reg
+    else:
+        return "%" + reg
 
 def cvt_inst(inst: list[str]) -> str:
     match inst[0]:
         # ALU Instructions
         case "add":
-            return f"add.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
+            return f"add.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         case "sub":
-            return f"sub.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
+            return f"sub.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         case "mul":
-            return f"mul.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
+            return f"mul.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         case "div":
-            return f"div.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
+            return f"div.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         case "mod":
-            return f"rem.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
+            return f"rem.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         case "lsh":
-            return f"shl.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
+            return f"shl.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         case "rsh":
-            return f"shr.u64 %{inst[1]}, %{inst[2]}, %{inst[3]};"
-        # case "and":
-        #     return f"and.u64 {inst[1]}, {inst[2]}, {inst[3]};"
-        # case "and":
-        #     return
-        # case "or":
-        #     return
-        # case "xor":
-        #     return
+            return f"shr.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])}, {filter_keyword(inst[3])};"
         # Memory Instructions
-        case "stw":
-            return f"SAVE.u32 {inst[1]}"
-        case "stdw":
-            return f"SAVE.u64 {inst[1]}"
+        case "SAVE":
+            contents = (filter_keyword(reg) for reg in inst[2:])
+            contents = ", ".join(contents)
+            return f"SAVE [ {inst[1]} ] {{ { contents } }}" # just return everything
         # Other Instructions
         case "mov":
-            return f"mov.u64 %{inst[1]}, %{inst[2]};"
+            return f"mov.u64 {filter_keyword(inst[1])}, {filter_keyword(inst[2])};"
         case "clock":
-            return f"mov.u64 %{inst[1]}, %clock64;"
+            return f"mov.u64 {filter_keyword(inst[1])}, %clock64;"
         case "time":
-            return f"mov.u64 %{inst[1]}, %globaltimer;"
-        case "smid":
-            return f"mov.u64 %{inst[1]}, %smid;"
+            return f"mov.u64 {filter_keyword(inst[1])}, %globaltimer;"
+        case "cuid":
+            return f"""{{
+                .reg .b32 %tmp;
+                mov.u32 %tmp, %smid;
+                cvt.u64.u32 {filter_keyword(inst[1])}, %tmp;
+            }}"""
         case _:
             raise NotImplementedError(f"{inst} not yet supported")
 
@@ -80,5 +68,8 @@ def gencode(probes: list[Probe]) -> list[Probe]:
     return probes
 
 if __name__ == "__main__":
-    probes = [Probe(name='block_sched_start', level='warp', pos='kernel', size=0, before=None, after=[['clock', 'R0']]), Probe(name='block_sched_end', level='warp', pos='kernel', size=16, before=[['clock', 'R1'], ['sub', 'R2', 'R1', 'R0'], ['stdw', 'R0'], ['smid', 'R3'], ['stw', 'R2'], ['stw', 'R3']], after=None)]
+    probes = [
+        Probe(name='thread_start', level='warp', pos='kernel', size=0, before=None, after=[['clock', 'R0']]), 
+        Probe(name='thread_end', level='warp', pos='kernel', size=0, before=None, after=[['clock', 'R2'], ['sub', 'R1', 'R2', 'R0'], ['cuid', 'R3'], ['SAVE', 'block_sched', 'R0', 'R1', 'R3']])
+    ]
     print(gencode(probes))

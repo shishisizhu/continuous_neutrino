@@ -153,7 +153,7 @@ static void init(void) {
         fprintf(event_log, "[benchmark] ENABLED L2 Flush Size %ld\n", NEUTRINO_BENCHMARK_FLUSH_MEM_SIZE);
         real_cuMemAlloc_v2(&benchmark_flush_mem, NEUTRINO_BENCHMARK_FLUSH_MEM_SIZE);
     }
-    fprintf(event_log, "[info] init success\n"); 
+    fprintf(event_log, "[init] success\n"); 
     // leaving critical section, unlock
     pthread_mutex_unlock(&mutex);
     return;
@@ -329,26 +329,24 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
     int* probe_sizes; // size of probes
     int* probe_types; // type of probes
     bool succeed;         // jit status
-    // (optional) path to the python script for analysis
-    char* trace_hook;   
     // @note for dynamic buffer, i.e., only when DYNAMIC=true
     CUfunction countd = NULL;
     int n_count = 0, count_size = 0; // count_size is used only when DYNAMIC == True
 
     // try obtain the kernel compiled or raise compilation process 
     // @note count and record is only valid if succeed == true
-    if (funcmap_get((void*)f, &kernel_name, &n_param, &n_probe, &probe_sizes, &probe_types, &succeed, (void**)&probed, (void**)&pruned, (void**)&countd, &trace_hook) == -1) {
+    if (funcmap_get((void*)f, &kernel_name, &n_param, &n_probe, &probe_sizes, &probe_types, &succeed, (void**)&probed, (void**)&pruned, (void**)&countd) == -1) {
         fprintf(event_log, "[exec] funcmap-not-find %p\n", f);
         fflush(event_log); 
-        // here try to get binary from binmap and start JIT compile
+        // here try to get binary  from binmap and start JIT compile
         size_t size;
         void* bin;
         if (binmap_get(f, &size, &kernel_name, &bin) == -1) { // not found the binary, fall back
-            fprintf(event_log, "[jit] can't-find %p\n", f);
-            funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL, NULL); // set dummy with status FALSE
+            fprintf(event_log, "[probe] can't-find %p\n", f);
+            funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL); // set dummy with status FALSE
             goto backup;
         } else {
-            fprintf(event_log, "[jit] find %p name %s bin %p size %zu\n", f, kernel_name, bin, size);
+            fprintf(event_log, "[probe] find %p name %s bin %p size %zu\n", f, kernel_name, bin, size);
             fflush(event_log);
             // create a directory under the kernel directory with kernel_name
             // @note Linux has limit on directory length 255, replace it to sh1 so 20 char
@@ -359,14 +357,14 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
             sprintf(folder_name, "%d_%s", kernel_idx, tmp);
             free(tmp);
             kernel_idx++;
-            fprintf(event_log, "[jit] rename %s %s\n", kernel_name, folder_name);
+            fprintf(event_log, "[probe] rename %s %s\n", kernel_name, folder_name);
             char* dir = malloc(strlen(KERNEL_DIR) + strlen(folder_name) + 10);
             sprintf(dir, "%s/%s", KERNEL_DIR, folder_name);
             if (mkdir(dir, 0755) == 0) { 
-                fprintf(event_log, "[jit] mkdir %s\n", dir);
+                fprintf(event_log, "[probe] mkdir %s\n", dir);
             } else {
-                fprintf(event_log, "[jit] can't-mkdir %s\n", dir);
-                funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL, NULL); // set dummy with status FALSE
+                fprintf(event_log, "[probe] can't-mkdir %s\n", dir);
+                funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL); // set dummy with status FALSE
                 goto backup;
             }
             // create original.bin and write the binary to it
@@ -374,33 +372,33 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
             sprintf(path, "%s/original.bin", dir);
             FILE* original_bin = fopen(path, "wb");
             if (original_bin == NULL) {
-                fprintf(event_log, "[jit] can't-open %s\n", path);
-                funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL, NULL); // set dummy with status FALSE
+                fprintf(event_log, "[probe] can't-open %s\n", path);
+                funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL); // set dummy with status FALSE
                 goto backup;
             }
             fwrite(bin, size, 1, original_bin);
             fclose(original_bin);
-            fprintf(event_log, "[jit] write %s\n", path);
+            fprintf(event_log, "[probe] write %s\n", path);
             // create subprocess to run process.py, be aware of multi-processing
             pid_t pid = fork();
             if (pid < 0) {
-                fprintf(event_log, "[jit] can't-folk\n");
-                funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL, NULL); // set dummy with status FALSE
+                fprintf(event_log, "[probe] can't-folk\n");
+                funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL); // set dummy with status FALSE
                 goto backup;
             } else if (pid == 0) { // child process, run python process.py kernel name
                 // python process.py <work_dir> <kernel_name>
                 execlp(NEUTRINO_PYTHON, NEUTRINO_PYTHON, NEUTRINO_PROBING_PY, dir, kernel_name, NULL);
                 exit(EXIT_FAILURE); // reach here only if exec error -> failure
             } else { // parent process, wait for child
-                fprintf(event_log, "[jit] subproc %s %s %s %s\n", NEUTRINO_PYTHON, NEUTRINO_PROBING_PY, dir, kernel_name);
+                fprintf(event_log, "[probe] subproc %s %s %s %s\n", NEUTRINO_PYTHON, NEUTRINO_PROBING_PY, dir, kernel_name);
                 int status;
                 waitpid(pid, &status, 0);
                 if (status != EXIT_SUCCESS) { 
-                    fprintf(event_log, "[jit] python failed\n");
-                    funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL, NULL); // set dummy with status FALSE
+                    fprintf(event_log, "[probe] python failed\n");
+                    funcmap_set(f,kernel_name, 0, 0, NULL, NULL, false, NULL, NULL, NULL); // set dummy with status FALSE
                     goto backup; 
                 } else {
-                    fprintf(event_log, "[jit] python succeed\n");
+                    fprintf(event_log, "[probe] python succeed\n");
                 }
             }
             // read the kernel.info from file system
@@ -421,12 +419,12 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
                 sscanf(strptr, "%d,%d\n", &probe_types[idx], &probe_sizes[idx]);
                 strptr = strchr(strptr, '\n') + 1;
             }
-            // @note read process hook, not yet checked
-            char* info_end = strchr(strptr, '\n');
-            *info_end = '\0';
-            trace_hook = strptr;
+            // // @note read process hook, not yet checked
+            // char* info_end = strchr(strptr, '\n');
+            // *info_end = '\0';
+            // callback = strptr;
             // here read the 
-            fprintf(event_log, "[jit] read %s name %s n_param %d n_probe %d trace_hook %s\n", path, kernel_name, n_param, n_probe, trace_hook);
+            fprintf(event_log, "[probe] read %s name %s n_param %d n_probe %d \n", path, kernel_name, n_param, n_probe);
             // load probed.bin -> for collecting runtime info
             sprintf(path, "%s/probed.bin", dir);
             void* probed_bin = readf(path, "rb");
@@ -448,8 +446,8 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
                 CUDA_CHECK(real_cuModuleGetFunction(&countd, countd_mod, kernel_name));
             }
             // add record to hashmap to avoid re-compile 
-            funcmap_set(f, kernel_name, n_param, n_probe, probe_sizes, probe_types, true, probed, pruned, countd, trace_hook);
-            fprintf(event_log, "[jit] finish %p name %s n_param %d\n", f, kernel_name, n_param);
+            funcmap_set(f, kernel_name, n_param, n_probe, probe_sizes, probe_types, true, probed, pruned, countd);
+            fprintf(event_log, "[probe] finish %p name %s n_param %d\n", f, kernel_name, n_param);
             fflush(event_log);
             // free memory before we leave
             free(dir);
@@ -509,6 +507,7 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
         count_args[n_param] = &d_counter;
         result = real_cuLaunchKernel(countd, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, 
                                         blockDimZ, sharedMemBytes, hStream, count_args, extra);
+        // cuMemcpy is a blocked call
         result = real_cuMemcpyDtoH_v2(h_counter, d_counter, size_counter);
         if (result != CUDA_SUCCESS) 
             goto backup;
@@ -632,26 +631,16 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
         return CUDA_SUCCESS; 
     }
     // write header to file
-    trace_header_t header;
-    // gridDim: uint3
-    header.gridDimX = gridDimX;
-    header.gridDimY = gridDimY;
-    header.gridDimZ = gridDimZ;
-    // blockDim: uint3
-    header.blockDimX = blockDimX;
-    header.blockDimY = blockDimY;
-    header.blockDimZ = blockDimZ;
-    // sharedMemBytes and numProbes
-    header.sharedMemBytes = sharedMemBytes;
-    header.numProbes = n_probe;
+    trace_header_t header = { gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, n_probe };
     fwrite(&header, sizeof(header), 1, fp);
     // write sections to file
     size_t offset = sizeof(header) + n_probe * sizeof(trace_section_t);
     for (int idx = 0; idx < n_probe; idx++) {
         trace_section_t section;
         section.size = probe_sizes[idx] != -1 ? probe_sizes[idx] : count_size; 
+        section.warpDiv = (probe_types[idx] == PROBE_TYPE_WARP) ? WARP_SIZE : 1; 
         section.offset = offset;
-        offset += (probe_types[idx] == PROBE_TYPE_THREAD) ? gridSize * blockSize * section.size : gridSize * warpSize * section.size;
+        offset += gridSize * blockSize * section.size / section.warpDiv; 
         fwrite(&section, sizeof(section), 1, fp);
     }
     // write data
@@ -692,22 +681,22 @@ leave:
         // In normal mode, report the prologue, kernel, epilogue and impact ratio
         fprintf(event_log, "[exec] prologue %f kernel %f epilogue %f ratio %f\n", prologue_time, kernel_time, epilogue_time, (prologue_time + kernel_time + epilogue_time) / kernel_time);
         // Also create subprocess for analyze routine
-        if (trace_hook && strlen(trace_hook) >= 3 && strcmp(trace_hook + strlen(trace_hook) - 3, ".py") == 0) {
+        if (NEUTRINO_CALLBACK && strlen(NEUTRINO_CALLBACK) >= 3 && strcmp(NEUTRINO_CALLBACK + strlen(NEUTRINO_CALLBACK) - 3, ".py") == 0) {
             pid_t pid = fork();
             if (pid < 0) {
-                fprintf(event_log, "[jit] can't-folk\n");
+                fprintf(event_log, "[probe] can't-folk\n");
             } else if (pid == 0) { // child process, run python process.py kernel name
                 // python process.py <work_dir> <kernel_name>
-                execlp(NEUTRINO_PYTHON, NEUTRINO_PYTHON, trace_hook, DUMP_FILE_NAME, NULL);
+                execlp(NEUTRINO_PYTHON, NEUTRINO_PYTHON, NEUTRINO_CALLBACK, DUMP_FILE_NAME, NULL);
                 exit(EXIT_FAILURE); // reach here only if exec error -> failure
             } else { // parent process, wait for child
-                fprintf(event_log, "[analyze] subproc %s %s %s\n", NEUTRINO_PYTHON, trace_hook, DUMP_FILE_NAME);
+                fprintf(event_log, "[callback] subproc %s %s %s\n", NEUTRINO_PYTHON, NEUTRINO_CALLBACK, DUMP_FILE_NAME);
                 int status;
                 waitpid(pid, &status, 0);
                 if (status != EXIT_SUCCESS) { 
-                    fprintf(event_log, "[analyze] failed\n");
+                    fprintf(event_log, "[callback] failed\n");
                 } else {
-                    fprintf(event_log, "[analyze] succeed\n");
+                    fprintf(event_log, "[callback] succeed\n");
                 }
             }
         }

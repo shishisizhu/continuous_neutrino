@@ -24,7 +24,7 @@ def main():
     NEUTRINO_REAL_DRIVER_NAME: str = config["NEUTRINO_REAL_DRIVER_LIB_NAME"]
     NEUTRINO_MODE            : str = config["NEUTRINO_MODE"]
     # available built-in tools
-    NEUTRINO_TOOLS = {tool[:-5] : tool for tool in os.listdir(NEUTRINO_TOOLS_DIR) if tool.endswith(".toml")}
+    NEUTRINO_TOOLS = {tool[:-3] : tool for tool in os.listdir(NEUTRINO_TOOLS_DIR) if tool.endswith(".py")}
     
     parser = argparse.ArgumentParser(
         prog='neutrino', usage='%(prog)s [options] command',
@@ -44,6 +44,8 @@ def main():
                         help='filter OUT buggy kernels by (part of) name, split by :')
     parser.add_argument('-k', '--kernel', 
                         help='filter the kernel by (part of) name, split by :')
+    parser.add_argument('--callback', 
+                        help='attach callback for trace analysis')
     parser.add_argument('--benchmark', action='store_true', 
                         help="enable benchmark mode to evaluate overhead w.r.t. the original kernel")
     parser.add_argument('--memusage', action='store_true', 
@@ -71,17 +73,44 @@ def main():
     assert len(command) > 0, "Command must be specified"
     
     # Parse the PROBE
-    NEUTRINO_PROBE: str = args.probe
-    # No suffix := use built-in tools
-    if not NEUTRINO_PROBE.endswith(".toml"): # No suffix := use built-in tools
-        if  NEUTRINO_PROBE not in NEUTRINO_TOOLS:
-            print(f"{NEUTRINO_PROBE} not in tools: {NEUTRINO_TOOLS}", file=sys.stderr)
+    NEUTRINO_PROBE_PATH: str = args.probe
+    NEUTRINO_READING: str = None
+    # NOTE endswith .py triggers the Tracing DSL
+    if NEUTRINO_PROBE_PATH.endswith(".py"):
+        from neutrino.language.compiler import compile
+        source = open(NEUTRINO_PROBE_PATH, "r").read()
+        NEUTRINO_PROBE = compile(NEUTRINO_MODE, source)
+    elif NEUTRINO_PROBE_PATH.endswith(".toml"):
+        NEUTRINO_PROBE = toml.load(NEUTRINO_PROBE_PATH)
+    else:
+        # No suffix := use built-in tools
+        if  NEUTRINO_PROBE_PATH not in NEUTRINO_TOOLS:
+            print(f"[error] {NEUTRINO_PROBE_PATH} not in tools: {NEUTRINO_TOOLS}", file=sys.stderr)
             exit(-1)
         else:
-            NEUTRINO_PROBE = os.path.join(NEUTRINO_TOOLS_DIR, NEUTRINO_TOOLS[NEUTRINO_PROBE])
-    NEUTRINO_PROBE = toml.load(NEUTRINO_PROBE)
+            from neutrino.language.compiler import compile
+            source = open(os.path.join(NEUTRINO_TOOLS_DIR, NEUTRINO_TOOLS[NEUTRINO_PROBE_PATH]), "r").read()
+            NEUTRINO_PROBE = compile(NEUTRINO_MODE, source)
+            
+    # NOTE generate the trace reading code
+    from neutrino.utils.trace_reading import gen_reading_code
+    NEUTRINO_READING = gen_reading_code(NEUTRINO_PROBE)
+    
     # NOTE check if dynamic is True, shall have a specific keyword in top-level of probe
     NEUTRINO_DYNAMIC = "dynamic" in NEUTRINO_PROBE and NEUTRINO_PROBE["dynamic"] is True
+    
+    # TODO change the callback to other places
+    NEUTRINO_CALLBACK = NEUTRINO_PROBE["CALLBACK"] if "CALLBACK" in NEUTRINO_PROBE else None
+    NEUTRINO_CALLBACK = args.callback if args.callback is not None else NEUTRINO_CALLBACK
+    if NEUTRINO_CALLBACK:
+        # search the path 
+        if not os.path.exists(NEUTRINO_CALLBACK):
+            searched = os.path.join(os.path.dirname(NEUTRINO_PROBE_PATH), NEUTRINO_CALLBACK)
+            if os.path.exists(searched):
+                NEUTRINO_CALLBACK = searched
+            else:
+                print(f"[warn] callback {NEUTRINO_CALLBACK} not found")
+                NEUTRINO_CALLBACK = None
 
     # a copied environment variables
     env = os.environ.copy()
@@ -106,12 +135,16 @@ def main():
     # NOTE some bugs here -> still working on
     env["NEUTRINO_ENABLE"] = "1"
     # An Environmental Variable to enable the benchmark mode
-    env["NEUTRINO_BENCHMARK"] = NEUTRINO_BENCHMARK
-    env["NEUTRINO_MEMUSAGE"]  = NEUTRINO_MEMUSAGE
+    env["NEUTRINO_BENCHMARK"]    = NEUTRINO_BENCHMARK
+    env["NEUTRINO_MEMUSAGE"]     = NEUTRINO_MEMUSAGE
     # An Environmental Variables to enable the debug mode -> more messages
     # env["NEUTRINO_VERBOSE"] = "1"
     if NEUTRINO_DYNAMIC:
-        env["NEUTRINO_DYNAMIC"] = "1"
+        env["NEUTRINO_DYNAMIC"]  = "1"
+    if NEUTRINO_READING:
+        env["NEUTRINO_READING"]  = NEUTRINO_READING
+    if NEUTRINO_CALLBACK:
+        env["NEUTRINO_CALLBACK"] = NEUTRINO_CALLBACK
 
     # FIX for Triton
     if NEUTRINO_MODE == "CUDA":

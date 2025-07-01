@@ -37,6 +37,7 @@ static void* shared_lib           = NULL; // handle to real cuda driver
 static char* NEUTRINO_REAL_DRIVER = NULL; // path to real cuda driver, loaded by env_var NEUTRINO_REAL_DRIVER
 static char* NEUTRINO_PYTHON      = NULL; // path to python exe, loaded by env_var NEUTRINO_PYTHON
 static char* NEUTRINO_PROBING_PY  = NULL; // path to process.py, loaded by env_var NEUTRINO_PROBING_PY
+static char* NEUTRINO_CALLBACK    = NULL; // callback to analyze the kernel
 
 // directory structure 
 static char* RESULT_DIR = NULL; // env_var NEUTRINO_TRACEDIR/MM_DD_HH_MM_SS/result
@@ -80,7 +81,6 @@ static int DYNAMIC = 0;
         exit(EXIT_FAILURE);                \
     }                                      \
 } while (0)
-
 
 // utilities to get the trace folder name
 char* get_tracedir() {
@@ -189,6 +189,7 @@ static void common_init(void) {
         fprintf(stderr, "[error] envariable NEUTRINO_PROBING_PY not set\n");
         exit(EXIT_FAILURE);
     }
+    NEUTRINO_CALLBACK = getenv("NEUTRINO_CALLBACK");
     // External Feature Controls
     char* dynamic = getenv("NEUTRINO_DYNAMIC");
     if (dynamic != NULL && atoi(dynamic) != 0) {
@@ -223,26 +224,41 @@ static void common_init(void) {
         perror("Can not create KERNEL_DIR");
         exit(EXIT_FAILURE);
     }
-    // 
-    char* PROBES_PATH = malloc(strlen(TRACE_DIR) + 20);
-    sprintf(PROBES_PATH, "%s/probe.toml", TRACE_DIR);
-    FILE* probes_f = fopen(PROBES_PATH, "w");
+    /**
+     * Dump the probe.toml to TRACE_DIR/probe.toml
+     */
+    char* TMP_PATH = malloc(strlen(TRACE_DIR) + 20);
+    sprintf(TMP_PATH, "%s/probe.toml", TRACE_DIR);
+    FILE* probes_f = fopen(TMP_PATH, "w");
     if (probes_f == NULL) {
         perror("Can open probe.toml");
         exit(EXIT_FAILURE);
     }
     fwrite(NEUTRINO_PROBES, sizeof(char), strlen(NEUTRINO_PROBES), probes_f);
     fclose(probes_f);
-    // event.log puts the contents
-    char* LOG_PATH = malloc(strlen(TRACE_DIR) + 20);
-    sprintf(LOG_PATH, "%s/event.log", TRACE_DIR);
-    event_log = fopen(LOG_PATH, "a");
+    /**
+     * Dump the trace reading code to the TRACE_DIR/read.py
+     */
+    const char* NEUTRINO_READING = getenv("NEUTRINO_READING");
+    if (NEUTRINO_READING) {
+        sprintf(TMP_PATH, "%s/read.py", TRACE_DIR);
+        FILE* reading_f = fopen(TMP_PATH, "w");
+        if (reading_f != NULL) {
+            fwrite(NEUTRINO_READING, sizeof(char), strlen(NEUTRINO_READING), reading_f);
+            fclose(reading_f);
+        }
+    }
+    /**
+     * Open the event.log as the operation log of hook driver
+     */
+    sprintf(TMP_PATH, "%s/event.log", TRACE_DIR);
+    event_log = fopen(TMP_PATH, "a");
     if (event_log == NULL) {
         perror("Can open event.log");
         exit(EXIT_FAILURE);
     }
     // print metadata like pid and cmdline
-    fprintf(event_log, "[pid] %d\n", getpid()); // print the process id
+    fprintf(event_log, "[init] pid %d\n", getpid()); // print the process id
     // get command line arguments
     char cmdpath[128], cmdline[1024];
     sprintf(cmdpath, "/proc/%d/cmdline", getpid());
@@ -258,17 +274,16 @@ static void common_init(void) {
     }
     fclose(cmdfile);
     // print the command line, helpful to correlate source code
-    fprintf(event_log, "[cmd] %zu %s\n", len, cmdline); 
+    fprintf(event_log, "[init] cmd %zu %s\n", len, cmdline); 
     fflush(event_log);
     // load real driver shared library
     shared_lib = dlopen(NEUTRINO_REAL_DRIVER, RTLD_LAZY);
     CHECK_DL();
-    fprintf(event_log, "[info] dl %p\n", shared_lib); 
+    fprintf(event_log, "[init] dl %p\n", shared_lib); 
     fflush(event_log);
     // get the starting time
     clock_gettime(CLOCK_REALTIME, &start);
-    free(PROBES_PATH);
-    free(LOG_PATH);
+    free(TMP_PATH);
     free(TRACE_DIR);
     // don't free RESULT_DIR and KERNEL_DIR, we will use it later
 }
@@ -297,8 +312,9 @@ typedef struct {
 } trace_header_t;
 
 typedef struct {
-    uint64_t size;   // size of record per thread/warp in bytes
-    uint64_t offset; // size of each record
+    uint32_t size;    // size of record per thread/warp in byte
+    uint32_t warpDiv; // warpSize for warp-level, 1 for thread-level
+    uint64_t offset;  // offset for fseek
 } trace_section_t;
 
 /**
@@ -512,14 +528,13 @@ typedef struct {
     void* probed;      // probed CUfunction/HIPfunction
     void* pruned;      // pruned CUfunction/HIPfunction, for benchmark only
     void* countd;      // counting CUfunction/HIPfunction, for DYNAMIC=TRUE only
-    char* trace_hook;  // hook to analyze the trace
     UT_hash_handle hh; // reserved by uthash
 } funcmap_item_t;
 
 static funcmap_item_t* funcmap = NULL;
 
 // add an item to the hashmap-based code cache
-int funcmap_set(void* original, char* name, int n_param, int n_probe, int* probe_sizes, int* probe_types, bool succeed, void* probed, void* pruned, void* countd, char* trace_hook) {
+int funcmap_set(void* original, char* name, int n_param, int n_probe, int* probe_sizes, int* probe_types, bool succeed, void* probed, void* pruned, void* countd) {
     pthread_mutex_lock(&mutex);
     funcmap_item_t* item = (funcmap_item_t*) malloc(sizeof(funcmap_item_t));
     item->original = original;
@@ -531,7 +546,6 @@ int funcmap_set(void* original, char* name, int n_param, int n_probe, int* probe
     item->n_probe = n_probe;
     item->probe_sizes = probe_sizes;
     item->probe_types = probe_types;
-    item->trace_hook  = trace_hook;
     item->succeed = succeed; // add func status -> if failed then no need to try probing again and again
     HASH_ADD_PTR(funcmap, original, item);
     pthread_mutex_unlock(&mutex);
@@ -539,7 +553,7 @@ int funcmap_set(void* original, char* name, int n_param, int n_probe, int* probe
 }
 
 // get an item from hashmap-based code cache
-int funcmap_get(void* original, char** name, int* n_param, int* n_probe, int** probe_sizes, int** probe_types, bool* succeed, void** probed, void** pruned, void** countd, char** trace_hook) {
+int funcmap_get(void* original, char** name, int* n_param, int* n_probe, int** probe_sizes, int** probe_types, bool* succeed, void** probed, void** pruned, void** countd) {
     pthread_mutex_lock(&mutex);
     funcmap_item_t* item;
     HASH_FIND_PTR(funcmap, &original, item);
@@ -553,7 +567,6 @@ int funcmap_get(void* original, char** name, int* n_param, int* n_probe, int** p
         *probed      = item->probed;
         *pruned      = item->pruned;
         *countd      = item->countd;
-        *trace_hook  = item->trace_hook;
         pthread_mutex_unlock(&mutex);
         return 0;
     } else { 
@@ -582,7 +595,7 @@ char* sha1(const char* text) {
 
 /**
  * File Utilities, Read File without knowing size
- * @note not memory safe, remember to free pointer returned
+ * @note remember to free pointer returned
  */
 inline void* readf(char* path, const char* mode) {
     FILE* file = fopen(path, mode);

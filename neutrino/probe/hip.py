@@ -36,7 +36,8 @@ import traceback # usef for print backtrace to log file instead of stdout
 import toml      # to load probes from envariables
 import yaml      # AMD GCN ASM use YAML as METADATA Storage
 from dataclasses import dataclass
-from engine import Probe, Ref, safe_load_probes
+from neutrino.common import Register, Probe, Map, load
+from neutrino.probe import Ref, KernelParam
 
 workdir = sys.argv[1]     # directory contains original.bin
 log = open(os.path.join(workdir, "process.log"), 'w')
