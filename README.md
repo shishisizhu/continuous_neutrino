@@ -166,8 +166,8 @@ neutrino
 │   ├── __init__.py # DSL Primitive
 │   ├── compiler.py # Exported Compiler API
 │   ├── frontend.py # Parser and AST Transformer
-│   ├── cuda.py     # CUDA PTX Codegen Backend
-│   └── hip.py      # AMD ROCm Codegen Backend
+│   ├── gcn.py     # CUDA PTX Codegen Backend
+│   └── ptx.py      # AMD ROCm Codegen Backend
 ├── probe    # Probe Engine
 │   ├── __init__.py # Common Definition and Utilities
 │   ├── cuda.py     # CUDA PTX Impl
