@@ -16,6 +16,9 @@
 #include <pthread.h>  // for mutex lock
 #include "uthash.h"   // for hashmap
 #include "sha1.h"     // for SHA1 hash algorithm
+#include <stdatomic.h>// for atomic_int exec_mode
+#include <signal.h>   // for signal to contral kernel exec mode
+#include "logger.h"
 
 /**
  * @todo change probe type to enum for better portability
@@ -28,7 +31,8 @@
 #define CDIV(a,b) (a + b - 1) / (b)
 
 static FILE* event_log; // file pointer to event_log:  NEUTRINO_TRACEDIR/MM_DD_HH_MM_SS/event.event_log
-
+static FILE* kernel_log; // file pointer to kernel_log:  /home/admin/logs/xpu_kernels.log
+atomic_int exec_mode = 0; // 0: original mode, 1: probed mode
 /**
  * System Configuration and Setup
  */
@@ -154,6 +158,35 @@ char* get_tracedir() {
 }
 
 /**
+* @note Use atomic_int to continuously present kernel exec mode and you can use 
+*       "kill -SIGUSR1(or -SIGUSR2) <neutrino> pid" command to change exec_mode.
+*       cuLaunchKernel choose original kernel or probed kernel depends on exec_mode.
+*/
+void signal_handler(int signum) {
+    if (signum == SIGUSR1) {
+        atomic_store(&exec_mode, 1); // SIGUSR1 switch exec_mode to 1 (exec probed kernel)
+        fprintf(event_log, "[Signal Handler] Switched to PROBED mode");
+        fflush(event_log);
+    } else if (signum == SIGUSR2) {
+        atomic_store(&exec_mode, 0); // SIGUSR2 switch exec_mode to 0 (exec original kernel)
+        fprintf(event_log, "[Signal Handler] Switched to ORIGINAL mode");
+        fflush(event_log);
+    }
+}
+// init both signals
+void initialize_signals() {
+    if (signal(SIGUSR1, signal_handler) == SIG_ERR) {
+        fprintf(event_log, "[init] Error setting SIGUSR1 handler");
+        fflush(event_log);
+    }
+    if (signal(SIGUSR2, signal_handler) == SIG_ERR) {
+        fprintf(event_log, "[init] Error setting SIGUSR2 handler");
+    }
+    fprintf(event_log, "[init] setting both SIGUSR handler successfully");
+    fflush(event_log);
+}
+
+/**
  * @note semaphores for thread safety: Neutrino don't envision multi-threading
  *       but upper layer, like PyTorch may use multi-threading for their need
  * There's only a few critical section like init and hashmaps
@@ -257,6 +290,11 @@ static void common_init(void) {
         perror("Can open event.log");
         exit(EXIT_FAILURE);
     }
+    /**
+     * Create a thread to deal with log write(reduce the common mode delay)
+     */
+    init_logger(); 
+
     // print metadata like pid and cmdline
     fprintf(event_log, "[init] pid %d\n", getpid()); // print the process id
     // get command line arguments
@@ -286,6 +324,9 @@ static void common_init(void) {
     free(TMP_PATH);
     free(TRACE_DIR);
     // don't free RESULT_DIR and KERNEL_DIR, we will use it later
+    
+    //init signal to contral kernel exec mode
+    initialize_signals();
 }
 
 /**
@@ -492,6 +533,20 @@ int binmap_update_name_key(void* old_key, void* new_key, char* name) {
         new_item->size = old_item->size;
         new_item->code  = old_item->code;
         HASH_ADD_PTR(binmap, key, new_item);
+        pthread_mutex_unlock(&mutex);
+        return 0;
+    } else {
+        pthread_mutex_unlock(&mutex);
+        return -1;
+    }
+}
+
+int binmap_get_kernel_name(void* key, char** name) {
+    pthread_mutex_lock(&mutex);
+    binmap_item* item;
+    HASH_FIND_PTR(binmap, &key, item);
+    if (item != NULL) { 
+        *name = item->name;
         pthread_mutex_unlock(&mutex);
         return 0;
     } else {

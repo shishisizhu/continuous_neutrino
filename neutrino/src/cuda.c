@@ -313,7 +313,20 @@ CUresult cuLibraryGetModule(CUmodule* pMod, CUlibrary library) {
 
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
     if (shared_lib == NULL) { init(); }
-    
+
+    char* kernel_name;
+    if(binmap_get_kernel_name(f, &kernel_name) == -1) {
+        logf("[unknown kernel] null\n");
+    }
+    else {
+        logf("[kernel] %s\n", kernel_name);
+    }
+
+    //Original mode, Directly exec Original Mode
+    if (!exec_mode) {
+        goto backup;
+    }
+
     // for time measurement to understand the overhead of Neutrino
     CUevent start_event, end_event;
     CUDA_CHECK(real_cuEventCreate(&start_event, CU_EVENT_DEFAULT));
@@ -324,7 +337,6 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
     float prologue_time, kernel_time, epilogue_time; // time
     CUresult result;
     CUfunction probed, pruned; // countd is only used when DYNAMIC == True
-    char* kernel_name;
     int n_param, n_probe; 
     int* probe_sizes; // size of probes
     int* probe_types; // type of probes
@@ -680,7 +692,7 @@ leave:
     } else {
         // In normal mode, report the prologue, kernel, epilogue and impact ratio
         fprintf(event_log, "[exec] prologue %f kernel %f epilogue %f ratio %f\n", prologue_time, kernel_time, epilogue_time, (prologue_time + kernel_time + epilogue_time) / kernel_time);
-        // Also create subprocess for analyze routine
+        // Also create subprocess for analyze routi
         if (NEUTRINO_CALLBACK && strlen(NEUTRINO_CALLBACK) >= 3 && strcmp(NEUTRINO_CALLBACK + strlen(NEUTRINO_CALLBACK) - 3, ".py") == 0) {
             pid_t pid = fork();
             if (pid < 0) {
@@ -711,10 +723,7 @@ leave:
     return CUDA_SUCCESS; // reach here must be CUDA_SUCCESS
 
 backup:
-    // fall back to original version
-    fprintf(event_log, "[exec] backup %u %u %u block %u %u %u shared %u\n", gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes);
     result = real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
-    fflush(event_log);
     return result;
 }
 
