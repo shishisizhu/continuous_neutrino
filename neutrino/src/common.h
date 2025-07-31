@@ -18,7 +18,7 @@
 #include "sha1.h"     // for SHA1 hash algorithm
 #include <stdatomic.h>// for atomic_int exec_mode
 #include <signal.h>   // for signal to contral kernel exec mode
-#include "logger.h"
+#include "prod_logger.h"
 
 /**
  * @todo change probe type to enum for better portability
@@ -31,7 +31,6 @@
 #define CDIV(a,b) (a + b - 1) / (b)
 
 static FILE* event_log; // file pointer to event_log:  NEUTRINO_TRACEDIR/MM_DD_HH_MM_SS/event.event_log
-static FILE* kernel_log; // file pointer to kernel_log:  /home/admin/logs/xpu_kernels.log
 atomic_int exec_mode = 0; // 0: original mode, 1: probed mode
 /**
  * System Configuration and Setup

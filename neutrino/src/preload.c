@@ -52,14 +52,15 @@ void* dlopen(const char *filename, int flags) {
     
     if (!NEUTRINO_DRIVER_NAME) {
         NEUTRINO_DRIVER_NAME = getenv("NEUTRINO_DRIVER_NAME");
-        // fprintf(stderr, "[info] NEUTRINO_DRIVER_NAME: %s\n", NEUTRINO_DRIVER_NAME);
+        //fprintf(stderr, "[info] NEUTRINO_DRIVER_NAME: %s\n", NEUTRINO_DRIVER_NAME);
     }   
-
+    
     if (filename != NULL && (strstr(filename, NEUTRINO_DRIVER_NAME) != NULL)) {
         
         // Check if it's libcublas.so backtrace
         // @see https://man7.org/linux/man-pages/man3/backtrace.3.html
-        void* array[STACK_TRACE_SIZE];
+       
+	void* array[STACK_TRACE_SIZE];
         int size       = backtrace(array, STACK_TRACE_SIZE);
         char** strings = backtrace_symbols(array, size);
         int call_from_cublas = 0;
@@ -96,7 +97,7 @@ void* dlopen(const char *filename, int flags) {
             }
             // @note fix the multiple initialization bug
             ptr = real_dlopen(NEUTRINO_HOOK_DRIVER, flags | RTLD_GLOBAL);
-            // fprintf(stderr, "[dlopen] %s : %d, %p", NEUTRINO_HOOK_DRIVER, flags | RTLD_GLOBAL, ptr);
+            //fprintf(stderr, "[dlopen] %s : %d, %p\n", NEUTRINO_HOOK_DRIVER, flags | RTLD_GLOBAL, ptr);
             if (DL_VERBOSE) {
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);

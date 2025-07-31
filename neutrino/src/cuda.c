@@ -316,11 +316,12 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 
     char* kernel_name;
     if(binmap_get_kernel_name(f, &kernel_name) == -1) {
-        logf("[unknown kernel] null\n");
+        log_msg("[unknown kernel] null\n");
     }
     else {
-        logf("[kernel] %s\n", kernel_name);
+        log_msg("[kernel] %s\n", kernel_name);
     }
+    
 
     //Original mode, Directly exec Original Mode
     if (!exec_mode) {
