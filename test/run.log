@@ -1,0 +1,20 @@
+Using device: cuda
+Loading fixed dataset...
+Loading fixed model initial state...
+Starting training with fixed data and weights...
+Epoch [1/10], Loss: 2.3510, Time: 6.8695s
+Epoch [2/10], Loss: 2.3230, Time: 5.8310s
+Epoch [3/10], Loss: 2.2958, Time: 5.8301s
+Epoch [4/10], Loss: 2.2678, Time: 5.8288s
+Epoch [5/10], Loss: 2.2240, Time: 5.8274s
+Epoch [6/10], Loss: 2.1207, Time: 5.8275s
+Epoch [7/10], Loss: 1.9563, Time: 5.8284s
+Epoch [8/10], Loss: 1.6242, Time: 5.8309s
+Epoch [9/10], Loss: 1.1190, Time: 5.8219s
+Epoch [10/10], Loss: 0.7205, Time: 5.8153s
+✅ Total training time: 59.3108 seconds
+[info] 140727159262736 cublas use real: /lib/x86_64-linux-gnu/libcuda.so.575.57.08 0xf054990 1
+[info] 140727159262736 cublas use real: /lib/x86_64-linux-gnu/libcuda.so.575.57.08 0xf054990 1
+[info] 140727159262736 cublas use real: /lib/x86_64-linux-gnu/libcuda.so.575.57.08 0xf054990 2
+[info] 140727159262736 cublas use real: /lib/x86_64-linux-gnu/libcuda.so.575.57.08 0xf054990 2
+[info] 140727159262736 cublas use real: /lib/x86_64-linux-gnu/libcuda.so.575.57.08 0xf054990 2

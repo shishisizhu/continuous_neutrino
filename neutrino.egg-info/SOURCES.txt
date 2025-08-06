@@ -22,7 +22,6 @@ neutrino/language/frontend.py
 neutrino/language/gcn.py
 neutrino/language/ptx.py
 neutrino/probe/__init__.py
-neutrino/probe/cuda.py
 neutrino/probe/hip.py
 neutrino/src/common.h
 neutrino/src/cuda.c
@@ -53,3 +52,4 @@ neutrino/utils/__init__.py
 neutrino/utils/tensortrace.py
 neutrino/utils/trace_reading.py
 neutrino/utils/verifier.py
+test/test_cublas.py

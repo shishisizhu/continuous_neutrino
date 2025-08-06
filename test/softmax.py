@@ -9,7 +9,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 batch_size = 64
 seq_len = 128
 num_features = 128
-iterations = 1000000 # 循环次数
+iterations = 100000 # 循环次数
 
 # 创建样本数据，对 Softmax 来说，常见的是 `[batch_size, seq_len, num_features]` 形状
 data_softmax = torch.randn(batch_size, seq_len, num_features, device=device)
@@ -32,7 +32,7 @@ for _ in range(iterations):
 cuda_sync()  # 确保 GPU 任务全部完成
 end_softmax_dim_2 = time.time()
 print(f"Softmax (dim=2) {iterations} iterations total time: {end_softmax_dim_2 - start_softmax_dim_2:.6f} seconds")
-''' 
+
 # 测试 Softmax (dim=1) 的总耗时
 print("\nTesting Softmax (dim=1):")
 cuda_sync()  # 同步以确保之前的操作完成
@@ -42,4 +42,3 @@ for _ in range(iterations):
 cuda_sync()  # 确保 GPU 任务全部完成
 end_softmax_dim_1 = time.time()
 print(f"Softmax (dim=1) {iterations} iterations total time: {end_softmax_dim_1 - start_softmax_dim_1:.6f} seconds")
-'''

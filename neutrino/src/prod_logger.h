@@ -145,7 +145,7 @@ static void* logger_consumer(void *arg) {
             uint64_t sec = entry->timestamp / 1000000000;
             uint64_t ns = entry->timestamp % 1000000000;
 
-            int n = snprintf(line, sizeof(line), "[%lu.%09lu] TID-%u: %s\n",
+            int n = snprintf(line, sizeof(line), "[%lu.%09lu] TID-%u: %s",
                              sec, ns, entry->tid, entry->message);
             if (n > 0 && n < sizeof(line)) {
                 fwrite(line, 1, n, fp);

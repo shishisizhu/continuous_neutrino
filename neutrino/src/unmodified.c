@@ -1240,26 +1240,6 @@ CUresult cuMemcpy3DPeerAsync(const CUDA_MEMCPY3D_PEER* pCopy, CUstream hStream) 
     return err;
 }
 
-CUresult cuMemcpyBatchAsync(CUdeviceptr* dsts, CUdeviceptr* srcs, size_t* sizes, size_t count, CUmemcpyAttributes* attrs, size_t* attrsIdxs, size_t numAttrs, size_t* failIdx, CUstream hStream) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuMemcpyBatchAsync(dsts, srcs, sizes, count, attrs, attrsIdxs, numAttrs, failIdx, hStream); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuMemcpyBatchAsync %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuMemcpy3DBatchAsync(size_t numOps, CUDA_MEMCPY3D_BATCH_OP* opList, size_t* failIdx, unsigned long long flags, CUstream hStream) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuMemcpy3DBatchAsync(numOps, opList, failIdx, flags, hStream); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuMemcpy3DBatchAsync %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
 CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
     if (shared_lib == NULL)  { init(); }
     CUresult err = real_cuMemsetD8(dstDevice, uc, N); // call the real
@@ -1515,16 +1495,6 @@ CUresult cuMemGetHandleForAddressRange(void* handle, CUdeviceptr dptr, size_t si
     CUresult err = real_cuMemGetHandleForAddressRange(handle, dptr, size, handleType, flags); // call the real
     if (VERBOSE)  { 
         fprintf(event_log, "[info] cuMemGetHandleForAddressRange %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuMemBatchDecompressAsync(CUmemDecompressParams* paramsArray, size_t count, unsigned int flags, size_t* errorIndex, CUstream stream) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuMemBatchDecompressAsync(paramsArray, count, flags, errorIndex, stream); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuMemBatchDecompressAsync %d\n", err); 
         fflush(event_log); // block until output written for debugging
     }
     return err;
@@ -1990,16 +1960,6 @@ CUresult cuStreamGetPriority(CUstream hStream, int* priority) {
     return err;
 }
 
-CUresult cuStreamGetDevice(CUstream hStream, CUdevice* device) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuStreamGetDevice(hStream, device); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuStreamGetDevice %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
 CUresult cuStreamGetFlags(CUstream hStream, unsigned int* flags) {
     if (shared_lib == NULL)  { init(); }
     CUresult err = real_cuStreamGetFlags(hStream, flags); // call the real
@@ -2285,16 +2245,6 @@ CUresult cuEventElapsedTime(float* pMilliseconds, CUevent hStart, CUevent hEnd) 
     CUresult err = real_cuEventElapsedTime(pMilliseconds, hStart, hEnd); // call the real
     if (VERBOSE)  { 
         fprintf(event_log, "[info] cuEventElapsedTime %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuEventElapsedTime_v2(float* pMilliseconds, CUevent hStart, CUevent hEnd) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuEventElapsedTime_v2(pMilliseconds, hStart, hEnd); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuEventElapsedTime_v2 %d\n", err); 
         fflush(event_log); // block until output written for debugging
     }
     return err;
@@ -3990,16 +3940,6 @@ CUresult cuTensorMapEncodeIm2col(CUtensorMap* tensorMap, CUtensorMapDataType ten
     return err;
 }
 
-CUresult cuTensorMapEncodeIm2colWide(CUtensorMap* tensorMap, CUtensorMapDataType tensorDataType, cuuint32_t tensorRank, void* globalAddress, const cuuint64_t* globalDim, const cuuint64_t* globalStrides, int pixelBoxLowerCornerWidth, int pixelBoxUpperCornerWidth, cuuint32_t channelsPerPixel, cuuint32_t pixelsPerColumn, const cuuint32_t* elementStrides, CUtensorMapInterleave interleave, CUtensorMapIm2ColWideMode mode, CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion, CUtensorMapFloatOOBfill oobFill) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuTensorMapEncodeIm2colWide(tensorMap, tensorDataType, tensorRank, globalAddress, globalDim, globalStrides, pixelBoxLowerCornerWidth, pixelBoxUpperCornerWidth, channelsPerPixel, pixelsPerColumn, elementStrides, interleave, mode, swizzle, l2Promotion, oobFill); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuTensorMapEncodeIm2colWide %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
 CUresult cuTensorMapReplaceAddress(CUtensorMap* tensorMap, void* globalAddress) {
     if (shared_lib == NULL)  { init(); }
     CUresult err = real_cuTensorMapReplaceAddress(tensorMap, globalAddress); // call the real
@@ -4290,56 +4230,6 @@ CUresult cuGreenCtxStreamCreate(CUstream* phStream, CUgreenCtx greenCtx, unsigne
     return err;
 }
 
-CUresult cuLogsRegisterCallback(CUlogsCallback callbackFunc, void* userData, CUlogsCallbackHandle* callback_out) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuLogsRegisterCallback(callbackFunc, userData, callback_out); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuLogsRegisterCallback %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuLogsUnregisterCallback(CUlogsCallbackHandle callback) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuLogsUnregisterCallback(callback); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuLogsUnregisterCallback %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuLogsCurrent(CUlogIterator* iterator_out, unsigned int flags) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuLogsCurrent(iterator_out, flags); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuLogsCurrent %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuLogsDumpToFile(CUlogIterator* iterator, const char* pathToFile, unsigned int flags) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuLogsDumpToFile(iterator, pathToFile, flags); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuLogsDumpToFile %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuLogsDumpToMemory(CUlogIterator* iterator, char* buffer, size_t* size, unsigned int flags) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuLogsDumpToMemory(iterator, buffer, size, flags); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuLogsDumpToMemory %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
 CUresult cuArray3DCreate_v2(CUarray* pHandle, const CUDA_ARRAY3D_DESCRIPTOR* pAllocateArray) {
     if (shared_lib == NULL)  { init(); }
     CUresult err = real_cuArray3DCreate_v2(pHandle, pAllocateArray); // call the real
@@ -4485,6 +4375,16 @@ CUresult cuEventRecord_ptsz(CUevent hEvent, CUstream hStream) {
     CUresult err = real_cuEventRecord_ptsz(hEvent, hStream); // call the real
     if (VERBOSE)  { 
         fprintf(event_log, "[info] cuEventRecord_ptsz %d\n", err); 
+        fflush(event_log); // block until output written for debugging
+    }
+    return err;
+}
+
+CUresult cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, cuuint64_t flags, CUdriverProcAddressQueryResult* symbolStatus) {
+    if (shared_lib == NULL)  { init(); }
+    CUresult err = real_cuGetProcAddress_v2(symbol, pfn, cudaVersion, flags, symbolStatus); // call the real
+    if (VERBOSE)  { 
+        fprintf(event_log, "[info] cuGetProcAddress_v2 %d\n", err); 
         fflush(event_log); // block until output written for debugging
     }
     return err;
@@ -4740,16 +4640,6 @@ CUresult cuMemAllocPitch_v2(CUdeviceptr* dptr, size_t* pPitch, size_t WidthInByt
     return err;
 }
 
-CUresult cuMemBatchDecompressAsync_ptsz(CUmemDecompressParams* paramsArray, size_t count, unsigned int flags, size_t* errorIndex, CUstream stream) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuMemBatchDecompressAsync_ptsz(paramsArray, count, flags, errorIndex, stream); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuMemBatchDecompressAsync_ptsz %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
 CUresult cuMemFreeAsync_ptsz(CUdeviceptr dptr, CUstream hStream) {
     if (shared_lib == NULL)  { init(); }
     CUresult err = real_cuMemFreeAsync_ptsz(dptr, hStream); // call the real
@@ -4910,16 +4800,6 @@ CUresult cuMemcpy3DAsync_v2_ptsz(const CUDA_MEMCPY3D* pCopy, CUstream hStream) {
     return err;
 }
 
-CUresult cuMemcpy3DBatchAsync_ptsz(size_t numOps, CUDA_MEMCPY3D_BATCH_OP* opList, size_t* failIdx, unsigned long long flags, CUstream hStream) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuMemcpy3DBatchAsync_ptsz(numOps, opList, failIdx, flags, hStream); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuMemcpy3DBatchAsync_ptsz %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
 CUresult cuMemcpy3DPeerAsync_ptsz(const CUDA_MEMCPY3D_PEER* pCopy, CUstream hStream) {
     if (shared_lib == NULL)  { init(); }
     CUresult err = real_cuMemcpy3DPeerAsync_ptsz(pCopy, hStream); // call the real
@@ -5045,16 +4925,6 @@ CUresult cuMemcpyAtoH_v2_ptds(void* dstHost, CUarray srcArray, size_t srcOffset,
     CUresult err = real_cuMemcpyAtoH_v2_ptds(dstHost, srcArray, srcOffset, ByteCount); // call the real
     if (VERBOSE)  { 
         fprintf(event_log, "[info] cuMemcpyAtoH_v2_ptds %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuMemcpyBatchAsync_ptsz(CUdeviceptr* dsts, CUdeviceptr* srcs, size_t* sizes, size_t count, CUmemcpyAttributes* attrs, size_t* attrsIdxs, size_t numAttrs, size_t* failIdx, CUstream hStream) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuMemcpyBatchAsync_ptsz(dsts, srcs, sizes, count, attrs, attrsIdxs, numAttrs, failIdx, hStream); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuMemcpyBatchAsync_ptsz %d\n", err); 
         fflush(event_log); // block until output written for debugging
     }
     return err;
@@ -5655,16 +5525,6 @@ CUresult cuStreamGetCtx_v2_ptsz(CUstream hStream, CUcontext* pctx) {
     CUresult err = real_cuStreamGetCtx_v2_ptsz(hStream, pctx); // call the real
     if (VERBOSE)  { 
         fprintf(event_log, "[info] cuStreamGetCtx_v2_ptsz %d\n", err); 
-        fflush(event_log); // block until output written for debugging
-    }
-    return err;
-}
-
-CUresult cuStreamGetDevice_ptsz(CUstream hStream, CUdevice* device) {
-    if (shared_lib == NULL)  { init(); }
-    CUresult err = real_cuStreamGetDevice_ptsz(hStream, device); // call the real
-    if (VERBOSE)  { 
-        fprintf(event_log, "[info] cuStreamGetDevice_ptsz %d\n", err); 
         fflush(event_log); // block until output written for debugging
     }
     return err;

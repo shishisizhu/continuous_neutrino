@@ -39,7 +39,8 @@ SIGNATURE_C_NAME  = "signature.c"
 MODIFIED_FUNCTIONS: Dict[str, List[str]] = {
     "cu": ["cuMemAlloc_v2", "cuMemFree_v2", "cuModuleLoadData", "cuModuleGetFunction", 
         "cuKernelGetFunction", "cuLibraryGetKernel", "cuLibraryGetModule",
-        "cuLibraryLoadData", "cuLaunchKernel", "cuGetProcAddress_v2",  "cuGetProcAddress", 
+        "cuLibraryLoadData", "cuLaunchKernel","cuGetProcAddress_v2",  
+        "cuGetProcAddress", 
         "cuModuleLoadDataEx", "cuModuleLoad", "cuModuleLoadFatBinary", "cuLaunchKernelEx"],
     "hip": ["hipModuleLoadData", "hipModuleLoadDataEx", "hipModuleGetFunction", 
         "hipModuleLaunchKernel", "hipMalloc", "hipFree", "hipModuleLoad", "hipKernelNameRef",

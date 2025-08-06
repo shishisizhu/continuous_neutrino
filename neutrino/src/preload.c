@@ -14,6 +14,7 @@
 #include <execinfo.h>  // for backtrace and backtrace_symbols
 #include <stdlib.h>    // for malloc and free
 #include <time.h>      // for timing terms
+#include <unistd.h> 
 
 #ifndef STACK_TRACE_SIZE
 #define STACK_TRACE_SIZE 5
@@ -59,7 +60,8 @@ void* dlopen(const char *filename, int flags) {
         
         // Check if it's libcublas.so backtrace
         // @see https://man7.org/linux/man-pages/man3/backtrace.3.html
-       
+        void* ptr; 
+	
 	void* array[STACK_TRACE_SIZE];
         int size       = backtrace(array, STACK_TRACE_SIZE);
         char** strings = backtrace_symbols(array, size);
@@ -74,7 +76,6 @@ void* dlopen(const char *filename, int flags) {
             }
         }
         free(strings);
-        void* ptr;
         if (call_from_cublas) {
             if (NEUTRINO_REAL_DRIVER == NULL) {
                 NEUTRINO_REAL_DRIVER = getenv("NEUTRINO_REAL_DRIVER");
@@ -86,9 +87,10 @@ void* dlopen(const char *filename, int flags) {
             ptr = real_dlopen(NEUTRINO_REAL_DRIVER, flags);
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
-            long long time = ts.tv_nsec + ts.tv_sec * 1e9;
-            // printf("[info] %lld cublas use real: %s %p %d\n", time, NEUTRINO_REAL_DRIVER, ptr, flags);
-            fflush(stdout);
+          // long long time = ts.tv_nsec + ts.tv_sec * 1e9;
+	  // fprintf(stderr, "[dlopen] cublas use real %s [pid] %d : %d, %p\n", NEUTRINO_HOOK_DRIVER, getpid(), flags | RTLD_GLOBAL, ptr);
+	  // printf("[info] %lld cublas use real: %s %p %d\n", time, NEUTRINO_REAL_DRIVER, ptr, flags);
+          // fflush(stdout);
         } else {
             char* NEUTRINO_HOOK_DRIVER = getenv("NEUTRINO_HOOK_DRIVER");
             if (NEUTRINO_HOOK_DRIVER == NULL) {
@@ -97,20 +99,21 @@ void* dlopen(const char *filename, int flags) {
             }
             // @note fix the multiple initialization bug
             ptr = real_dlopen(NEUTRINO_HOOK_DRIVER, flags | RTLD_GLOBAL);
-            //fprintf(stderr, "[dlopen] %s : %d, %p\n", NEUTRINO_HOOK_DRIVER, flags | RTLD_GLOBAL, ptr);
+            //fprintf(stderr, "[dlopen] %s [pid] %d : %d, %p\n", NEUTRINO_HOOK_DRIVER, getpid(), flags | RTLD_GLOBAL, ptr);
             if (DL_VERBOSE) {
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);
                 long long time = ts.tv_nsec + ts.tv_sec * 1e9;
                 printf("[info] %lld use hooked: %s %p %d\n", time, NEUTRINO_HOOK_DRIVER, ptr, flags);
                 fflush(stdout);
-            }
+	    }
         }
         return ptr;
     } else { // not interested, just let them go via loading the correct
         // Call the original dlopen
         void* ptr = real_dlopen(filename, flags);
         // Print the name of the module being loaded
+	//fprintf(stderr, "[dlopen] %s : %d, %p\n", filename, flags, ptr);
         if (DL_VERBOSE) {
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
